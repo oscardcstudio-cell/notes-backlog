@@ -1,0 +1,34 @@
+{
+  "name": "notes-backlog",
+  "version": "1.0.0",
+  "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md. Backend Express storage-agnostic + widget React autonome + drain CLI. Extrait d'Auto-Polymarket.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Oscar de Canecaude",
+  "exports": {
+    "./server": "./src/server/createNotesRouter.js",
+    "./server/stores/memory": "./src/server/stores/memoryStore.js",
+    "./server/stores/json-file": "./src/server/stores/jsonFileStore.js",
+    "./client": "./src/client/NotesWidget.jsx",
+    "./drain": "./src/drain/drainNotes.js"
+  },
+  "bin": {
+    "notes-drain": "./src/drain/drainNotes.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "express": ">=4",
+    "react": ">=17"
+  },
+  "peerDependenciesMeta": {
+    "express": { "optional": true },
+    "react": { "optional": true }
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "keywords": ["notes", "backlog", "express", "react", "widget", "todo"]
+}
