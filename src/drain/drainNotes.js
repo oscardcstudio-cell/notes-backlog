@@ -17,13 +17,15 @@
  */
 
 import { promises as fs } from 'fs';
+import { categorize } from '../categorize/categorize.js';
 
 function log(msg) {
     process.stdout.write(`[${new Date().toISOString()}] [notes-drain] ${msg}\n`);
 }
 
 // Insère un bloc d'item juste après la ligne marqueur du BACKLOG.
-async function appendToBacklog(backlogPath, marker, note) {
+// `phaseLabel` (optionnel) annote la note avec sa catégorie/phase de rangement.
+async function appendToBacklog(backlogPath, marker, note, phaseLabel) {
     const raw = await fs.readFile(backlogPath, 'utf8');
     const idx = raw.indexOf(marker);
     if (idx === -1) throw new Error(`"${marker}" introuvable dans ${backlogPath}`);
@@ -34,6 +36,7 @@ async function appendToBacklog(backlogPath, marker, note) {
         ``,
         `### [LOW][TODO] 📝 Note — ${firstLine}`,
         `- **Découvert** : ${date} — saisie via le widget de notes`,
+        ...(phaseLabel ? [`- **Phase** : ${phaseLabel}`] : []),
         `- **Note** :`,
         ...note.text.split('\n').map(l => `  > ${l}`),
         `- **Action** : trier — convertir en item structuré, traiter, ou archiver`,
@@ -54,6 +57,11 @@ async function appendToBacklog(backlogPath, marker, note) {
  * @param {string} [opts.marker]      — section où insérer (défaut '## À faire')
  * @param {Object} [opts.authHeaders] — headers d'auth (ex: { 'x-admin-token': '…' })
  * @param {number} [opts.timeoutMs]   — défaut 8000
+ * @param {Array}  [opts.categories]  — buckets de rangement (ex: presets/companyPhases).
+ *        Si fourni, chaque note est classée et insérée sous le `marker` de sa catégorie.
+ *        Absent → comportement historique (tout sous le marker global).
+ * @param {Function} [opts.llmClassifier] — fallback async (text, categories)=>id, appelé
+ *        seulement quand les règles ne tranchent pas. Aucun client LLM embarqué.
  * @returns {Promise<{drained:number, pending:number}>}
  */
 export async function drainNotes(opts = {}) {
@@ -63,6 +71,8 @@ export async function drainNotes(opts = {}) {
     const marker = opts.marker || '## À faire';
     const authHeaders = opts.authHeaders || {};
     const timeoutMs = opts.timeoutMs || 8000;
+    const categories = Array.isArray(opts.categories) ? opts.categories : null;
+    const llmClassifier = opts.llmClassifier;
 
     if (!baseUrl) { log('baseUrl manquant — skip'); return { drained: 0, pending: 0 }; }
     if (!backlogPath) { log('backlogPath manquant — skip'); return { drained: 0, pending: 0 }; }
@@ -88,7 +98,20 @@ export async function drainNotes(opts = {}) {
     // Plus anciennes → plus récentes pour un ordre BACKLOG cohérent.
     for (const note of pending.slice().reverse()) {
         try {
-            await appendToBacklog(backlogPath, marker, note);
+            // Catégorisation optionnelle → marker de la phase, sinon marker global.
+            let targetMarker = marker;
+            let phaseLabel = null;
+            if (categories) {
+                const cat = await categorize(note.text, categories, { llmClassifier });
+                if (cat.marker) { targetMarker = cat.marker; phaseLabel = `${cat.label} (${cat.via})`; }
+            }
+            try {
+                await appendToBacklog(backlogPath, targetMarker, note, phaseLabel);
+            } catch (e) {
+                // Section de phase absente du BACKLOG → repli sur le marker global.
+                if (targetMarker !== marker) await appendToBacklog(backlogPath, marker, note, phaseLabel);
+                else throw e;
+            }
             const r = await fetch(`${notesUrl}/${encodeURIComponent(note.id)}/processed`, {
                 method: 'POST',
                 headers,

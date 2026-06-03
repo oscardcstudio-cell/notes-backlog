@@ -111,6 +111,46 @@ node node_modules/notes-backlog/src/drain/drainNotes.js
 À lancer périodiquement (cron, scheduler applicatif, tâche planifiée). Fail-soft :
 serveur down ⇒ les notes restent `pending`, drainées au run suivant.
 
+## Catégorisation automatique (par phase)
+
+Optionnel. En passant `categories`, chaque note est **classée** et insérée sous le
+`marker` de sa catégorie (au lieu du marker global). Le BACKLOG doit alors contenir
+une section par catégorie.
+
+Moteur **hybride, config-driven** (le package ne hardcode aucune taxonomie) :
+1. **Règles** d'abord — score par mots-clés (gratuit, instantané) ;
+2. **LLM en fallback** — seulement si les règles ne tranchent pas (zéro match ou
+   égalité). Aucun client LLM embarqué : tu injectes `llmClassifier`.
+
+```js
+import { drainNotes } from 'notes-backlog/drain';
+import { companyPhases } from 'notes-backlog/presets/company-phases'; // preset 7 phases
+
+await drainNotes({
+    baseUrl, backlogPath, marker: '## À trier',
+    categories: companyPhases,                 // ou tes propres buckets
+    llmClassifier: async (text, cats) => {     // optionnel
+        // appelle TON LLM, renvoie l'id d'une catégorie
+        return 'p4-offre-gtm';
+    },
+});
+```
+
+Une catégorie : `{ id, label?, keywords?: string[], marker?: string, default?: boolean }`.
+`default: true` = repli si rien ne matche. Si la section d'une phase est absente du
+BACKLOG, le drain retombe sur le marker global (fail-soft).
+
+Classement seul (hors drain) :
+
+```js
+import { categorize } from 'notes-backlog/categorize';
+const { id, marker, via } = await categorize('tester le pricing', companyPhases);
+// → { id: 'p4-offre-gtm', via: 'rules', ... }
+```
+
+Le preset `company-phases` mappe les notes sur les 7 phases du `COMPANY_PLAYBOOK.md`
+(start-up-box) → une note connaît la phase à laquelle la traiter.
+
 ## Origine
 
 Extrait d'Auto-Polymarket où le module relie le dashboard (Railway) au `BACKLOG.md`
