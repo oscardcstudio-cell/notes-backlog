@@ -151,6 +151,29 @@ const { id, marker, via } = await categorize('tester le pricing', companyPhases)
 Le preset `company-phases` mappe les notes sur les 7 phases du `COMPANY_PLAYBOOK.md`
 (start-up-box) → une note connaît la phase à laquelle la traiter.
 
+## Cycle de vie complet d'une note
+
+Une note passe par 4 états dans `.planning/notes/<sujet>.md` :
+
+| État | Marqueur | Qui | Quand |
+|---|---|---|---|
+| **déposée** | `- [date] texte…` | drain automatique | note saisie dans le widget |
+| **actionnée** | → issue / BACKLOG / phase GSD | agent/Oscar | décision "on revoit X" |
+| **en cours** | item dans une phase GSD ou BACKLOG avec `[ ]` | agent | pendant l'implémentation |
+| **résolue** | `✅ **RÉSOLU [date]** — fichier:ligne` | agent (après vérif code) | implémentation confirmée dans le code |
+
+### Convention RÉSOLU
+
+Quand un item est confirmé implémenté (grep/glob dans le code réel, jamais sur la mémoire) :
+
+```markdown
+- [2026-06-01] ~~**Titre de l'item**~~ ✅ **RÉSOLU [2026-06-05]** — `src/pages/Form.tsx:386`
+```
+
+**Règle de déclenchement** : si un agent re-surface un item comme "à faire" → vérifier dans le code → si implémenté → RÉSOLU immédiatement + propager dans `MASTER.md`/`ROADMAP.md`.
+
+Sans ce marqueur, les items résolus restent indiscernables des items ouverts et les agents les re-surfacent à chaque session.
+
 ## Origine
 
 Extrait d'Auto-Polymarket où le module relie le dashboard (Railway) au `BACKLOG.md`
