@@ -124,7 +124,7 @@ Moteur **hybride, config-driven** (le package ne hardcode aucune taxonomie) :
 
 ```js
 import { drainNotes } from 'notes-backlog/drain';
-import { companyPhases } from 'notes-backlog/presets/company-phases'; // preset 7 phases
+import { companyPhases } from 'notes-backlog/presets/company-phases'; // preset 8 phases
 
 await drainNotes({
     baseUrl, backlogPath, marker: '## À trier',
@@ -148,7 +148,7 @@ const { id, marker, via } = await categorize('tester le pricing', companyPhases)
 // → { id: 'p4-offre-gtm', via: 'rules', ... }
 ```
 
-Le preset `company-phases` mappe les notes sur les 7 phases du `COMPANY_PLAYBOOK.md`
+Le preset `company-phases` mappe les notes sur les 8 phases du `COMPANY_PLAYBOOK.md`
 (start-up-box) → une note connaît la phase à laquelle la traiter.
 
 ## Cycle de vie complet d'une note

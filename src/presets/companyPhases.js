@@ -1,5 +1,5 @@
 /**
- * Preset de catégories = les 7 phases du COMPANY_PLAYBOOK.md (+ juridique transverse).
+ * Preset de catégories = les 8 phases du COMPANY_PLAYBOOK.md (+ juridique transverse).
  *
  * C'est de la DATA optionnelle, pas du couplage : le cœur du package reste agnostique.
  * La box (start-up-box) importe ce preset et le passe à `drainNotes({ categories })`,
@@ -28,27 +28,33 @@ export const companyPhases = [
         keywords: ['business model', 'modèle éco', 'north star', 'kpi', 'metric', 'metrics', 'unit economics', 'marge', 'cac', 'ltv', 'runway', 'prévisionnel', 'business plan', 'rentabilité', 'subvention'],
     },
     {
-        id: 'p3-marque',
-        label: 'Phase 3 — Identité de marque',
-        marker: '## Phase 3 — Identité de marque',
-        keywords: ['marque', 'logo', 'charte', 'couleur', 'typo', 'typographie', 'manifesto', 'plateforme de marque', 'ton de voix', 'guide éditorial', 'direction artistique', 'nom', 'naming', 'identité visuelle'],
+        id: 'p3-marque-minimale',
+        label: 'Phase 3 — Marque minimale',
+        marker: '## Phase 3 — Marque minimale',
+        keywords: ['plateforme', 'plateforme de marque', 'positionnement', 'guide éditorial', 'ton de voix', 'nom', 'naming', 'valeurs'],
     },
     {
         id: 'p4-offre-gtm',
         label: 'Phase 4 — Offre & go-to-market',
         marker: '## Phase 4 — Offre & go-to-market',
-        keywords: ['prix', 'pricing', 'offre', 'packaging', 'palier', 'abonnement', 'freemium', 'landing', 'funnel', 'canal', 'acquisition', 'go-to-market', 'gtm', 'conversion', 'tarif'],
+        keywords: ['prix', 'pricing', 'offre', 'packaging', 'palier', 'abonnement', 'freemium', 'landing', 'funnel', 'canal', 'acquisition', 'go-to-market', 'gtm', 'conversion', 'tarif', 'willingness to pay', 'pré-commande', 'landing test'],
     },
     {
-        id: 'p5-build',
-        label: 'Phase 5 — Build / MVP',
-        marker: '## Phase 5 — Build / MVP',
+        id: 'p5-identite',
+        label: 'Phase 5 — Identité de marque complète',
+        marker: '## Phase 5 — Identité de marque complète',
+        keywords: ['marque', 'logo', 'charte', 'couleur', 'typo', 'typographie', 'manifesto', 'direction artistique', 'identité visuelle', 'personas', 'fondations'],
+    },
+    {
+        id: 'p6-build',
+        label: 'Phase 6 — Build / MVP',
+        marker: '## Phase 6 — Build / MVP',
         keywords: ['build', 'mvp', 'feature', 'fonctionnalité', 'bug', 'code', 'dev', 'développement', 'api', 'base de données', 'dashboard', 'ui', 'ux', 'produit', 'tech'],
     },
     {
-        id: 'p6-lancement',
-        label: 'Phase 6 — Lancement',
-        marker: '## Phase 6 — Lancement',
+        id: 'p7-lancement',
+        label: 'Phase 7 — Lancement',
+        marker: '## Phase 7 — Lancement',
         keywords: ['lancement', 'launch', 'campagne', 'presse', 'post', 'social', 'email', 'newsletter', 'communication', 'annonce', 'tracking', 'analytics'],
     },
     {
