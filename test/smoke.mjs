@@ -121,6 +121,41 @@ ok(bl2.indexOf('## Pricing') < bl2.indexOf('📝 Note') && bl2.indexOf('📝 Not
 ok(bl2.includes('- **Phase** : Pricing'), 'bloc annoté de la phase');
 await fs.rm(backlog2, { force: true });
 
+// 6) coverage — mini-RTM backlog ↔ plan
+console.log('coverage');
+const { checkCoverage, parseItems, formatCoverageReport } = await import('../src/coverage/coverage.js');
+
+const backlogMd = `# Backlog
+- [ ] Tester le pricing freemium [[P4]]
+- [ ] Refaire le logo → identite-visuelle
+- [ ] Brancher l'auth OAuth ref:auth-oauth
+- [ ] Idée orpheline jamais planifiée
+- [x] Vieux truc déjà fait [[P0]]
+* Migration base de données vers Postgres
+`;
+const planMd = `# Roadmap
+## Phase 4 — Offre
+Landing + pricing freemium. tag: P4
+## Identité
+Charte et identite-visuelle complète.
+## Build
+Migration base de données + dashboard.
+`;
+const cov = checkCoverage(backlogMd, planMd);
+ok(parseItems(backlogMd).length === 6, 'parseItems: 6 items (puces -/*/+, checkbox)');
+ok(cov.summary.total === 5, 'done [x] exclu par défaut (5/6)');
+ok(cov.linked.some(i => i.title.includes('pricing')), 'anchor [[P4]] résolu → linked');
+ok(cov.linked.some(i => i.title.includes('logo')), 'anchor → identite-visuelle résolu → linked');
+ok(cov.broken.some(i => i.missing.includes('auth-oauth')), 'ref:auth-oauth absent du plan → broken');
+ok(cov.unlinked.some(i => i.title.includes('orpheline')), 'sans anchor → unlinked');
+ok(cov.unlinked.find(i => i.title.includes('orpheline')).maybeInPlan === false, 'orpheline: maybeInPlan=false (aucun token partagé)');
+ok(cov.unlinked.find(i => i.title.includes('Postgres')).maybeInPlan === true, 'Postgres sans anchor mais tokens dans le plan → maybeInPlan=true (suggestion)');
+ok(cov.summary.orphans === 3, 'orphans = broken(1) + unlinked(2)');
+const fullCov = checkCoverage('- [ ] A [[X]]', '# plan\nX présent ici');
+ok(fullCov.summary.orphans === 0, 'tout couvert → orphans=0 (gate verte)');
+ok(checkCoverage(backlogMd, planMd, { includeDone: true }).summary.total === 6, 'includeDone=true → 6 items');
+ok(formatCoverageReport(cov).includes('Liens cassés'), 'rapport markdown généré');
+
 // cleanup
 await fs.rm(f, { force: true }); await fs.rm(`${f}.tmp`, { force: true }); await fs.rm(backlog, { force: true });
 console.log(fail === 0 ? '\nALL GREEN' : `\n${fail} FAILED`);

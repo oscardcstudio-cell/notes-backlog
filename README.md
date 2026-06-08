@@ -10,6 +10,7 @@ Trois briques indépendantes :
 | **Backend** | `notes-backlog/server` | Routeur Express (POST/GET note, mark processed) |
 | **Widget** | `notes-backlog/client` | Composant React flottant autonome (sans dépendance UI) |
 | **Drain** | `notes-backlog/drain` | CLI/fonction : notes pending → `BACKLOG.md` → marque traité |
+| **Coverage** | `notes-backlog/coverage` | CLI/fonction : croise `BACKLOG.md` ↔ `ROADMAP.md`, signale les idées orphelines (mini-RTM) |
 
 Flux : on saisit une note dans le widget → POST stockée (`pending`) → un cron lance le drain → la note atterrit dans `BACKLOG.md` et passe `processed`.
 
@@ -150,6 +151,43 @@ const { id, marker, via } = await categorize('tester le pricing', companyPhases)
 
 Le preset `company-phases` mappe les notes sur les 8 phases du `COMPANY_PLAYBOOK.md`
 (start-up-box) → une note connaît la phase à laquelle la traiter.
+
+## Couverture backlog ↔ plan (mini-RTM, "lisseur d'idées")
+
+Vérifie qu'aucune idée du backlog n'est **perdue** : croise un backlog/notes markdown
+avec un plan/roadmap markdown et liste ce qui n'y est pas repris. C'est le pattern
+industriel de **traçabilité (RTM, requirements traceability matrix)** — détection des
+*orphaned items* — appliqué au markdown (ce qu'aucun outil markdown/git ne fait off-the-shelf).
+
+Sémantique d'un item (déterministe, anti-faux-positif) :
+
+| Classe | Quand | Verdict |
+|---|---|---|
+| `linked` | porte un anchor (`[[P4]]`, `→ landing`, `ref:auth`) **résolu** dans le plan | ✅ couvert |
+| `broken` | porte un anchor **introuvable** dans le plan | 🔴 lien cassé |
+| `unlinked` | aucun anchor | 🟠 à rattacher (matching flou = simple *suggestion*) |
+
+Le danger ciblé (idée droppée en silence) = `broken` + `unlinked`. On préfère sur-signaler
+(faux orphelin = bruit) plutôt que sous-signaler. Le matching flou ne fait que **suggérer**
+une présence possible (`maybeInPlan`), jamais affirmer "couvert".
+
+```js
+import { checkCoverage, formatCoverageReport } from 'notes-backlog/coverage';
+
+const { summary, broken, unlinked } = checkCoverage(backlogMd, planMd);
+// summary: { total, linked, broken, unlinked, orphans }
+console.log(formatCoverageReport({ summary, broken, unlinked, linked: [] }));
+```
+
+En CLI (binaire `notes-coverage`) — **gate** : exit 1 si une idée risque d'être perdue
+(utilisable en hook/CI) :
+
+```bash
+node node_modules/notes-backlog/src/coverage/coverage.js BACKLOG.md ROADMAP.md
+```
+
+Agnostique : aucun marker/taxonomie hardcodé. Patterns surchargeables
+(`itemPattern`, `anchorPattern`, `includeDone`, `suggestMinTokens`).
 
 ## Cycle de vie complet d'une note
 

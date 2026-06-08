@@ -23,6 +23,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { pathToFileURL } from 'url';
 
 function log(msg) {
     process.stdout.write(`[${new Date().toISOString()}] [notes-drain] ${msg}\n`);
@@ -219,7 +220,9 @@ export async function drainNotes(opts = {}) {
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+// isMain via pathToFileURL : robuste cross-OS (le naïf `file://${argv1}` casse sur
+// Windows — file:///C:/ vs file://C:/ → CLI jamais déclenché). Cf. GOTCHAS.md.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
     const authHeader = process.env.NOTES_AUTH_HEADER;
     const authValue = process.env.NOTES_AUTH_VALUE;
