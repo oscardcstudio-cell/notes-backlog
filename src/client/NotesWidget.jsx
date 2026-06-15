@@ -99,6 +99,20 @@ export function NotesWidget({
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
     }, [send]);
 
+    const abandon = useCallback(async (id) => {
+        try {
+            const r = await fetch(`${apiBase}/${encodeURIComponent(id)}/abandoned`, {
+                method: 'POST',
+                headers: resolveHeaders(authHeaders),
+                body: JSON.stringify({}),
+            });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            loadHistory();
+        } catch (e) {
+            setStatus({ msg: 'Abandon échoué: ' + e.message, color: '#ef4444' });
+        }
+    }, [apiBase, authHeaders, loadHistory]);
+
     return (
         <>
             <button
@@ -168,9 +182,22 @@ export function NotesWidget({
                             <div key={n.id} style={{ background: '#1e293b', borderRadius: 6, padding: '6px 8px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#94a3b8', marginBottom: 3 }}>
                                     <span>{fmtWhen(n.created_at)}</span>
-                                    {n.status === 'processed'
-                                        ? <span style={{ color: '#4ade80' }}>✓ traitée</span>
-                                        : <span style={{ color: '#fbbf24' }}>⏳ en attente</span>}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {n.status === 'processed'
+                                            ? <span style={{ color: '#4ade80' }}>✓ traitée</span>
+                                            : n.status === 'abandoned'
+                                                ? <span style={{ color: '#ef4444' }}>✗ abandonnée</span>
+                                                : (
+                                                    <>
+                                                        <span style={{ color: '#fbbf24' }}>⏳ en attente</span>
+                                                        <button
+                                                            onClick={() => abandon(n.id)}
+                                                            title="Abandonner cette note"
+                                                            style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
+                                                        >×</button>
+                                                    </>
+                                                )}
+                                    </div>
                                 </div>
                                 <div style={{ fontSize: 12, color: '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.text}</div>
                             </div>

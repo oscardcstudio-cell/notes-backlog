@@ -80,7 +80,7 @@ export function parseItems(backlogText, opts = {}) {
 }
 
 /** Tokens significatifs d'un titre (≥4 chars, hors stopwords FR/EN courants). */
-const STOPWORDS = new Set('avec dans pour sur les des une un le la de du et ou est sont cette ces que qui quoi mais donc plus pas faire fait this that with from have will into your then than have been about'.split(' '));
+const STOPWORDS = new Set('avec dans pour sur les des une un le la de du et ou est sont cette ces que qui quoi mais donc plus pas faire fait this that with from have will into your then than been about'.split(' '));
 function tokens(s) {
     return normalize(s).split(/[^a-z0-9]+/).filter(t => t.length >= 4 && !STOPWORDS.has(t));
 }

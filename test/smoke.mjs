@@ -20,6 +20,10 @@ ok(ms.markProcessed('a').status === 'processed', 'markProcessed');
 ok(ms.markProcessed('zzz') === null, 'unknown id → null');
 ms.prune(1);
 ok(ms.list().length === 1, 'prune');
+ok(ms.markAbandoned('b', 'non pertinente') !== null, 'markAbandoned returns note');
+ok(ms.list().find(n => n.id === 'b').status === 'abandoned', 'status=abandoned');
+ok(ms.list().find(n => n.id === 'b').reason === 'non pertinente', 'reason persisted');
+ok(ms.markAbandoned('zzz') === null, 'markAbandoned unknown id → null');
 
 // 2) jsonFileStore
 console.log('jsonFileStore');
@@ -32,6 +36,11 @@ const mp = await js.markProcessed('n1', 'BACKLOG.md#x');
 ok(mp && mp.status === 'processed' && mp.backlog_ref === 'BACKLOG.md#x', 'markProcessed + ref');
 const js2 = createJsonFileStore(f); // re-open → durabilité
 ok((await js2.list()).find(n => n.id === 'n1').status === 'processed', 'reload persists state');
+const ma = await js.markAbandoned('n2', 'doublon');
+ok(ma && ma.status === 'abandoned' && ma.reason === 'doublon', 'markAbandoned + reason');
+const js3 = createJsonFileStore(f);
+ok((await js3.list()).find(n => n.id === 'n2').status === 'abandoned', 'abandoned persisted after reload');
+ok(await js.markAbandoned('zzz') === null, 'markAbandoned unknown id → null');
 
 // 3) drainNotes contre un mock serveur + vrai BACKLOG.md
 console.log('drainNotes → BACKLOG.md');
@@ -68,6 +77,38 @@ ok(bl.includes('📝 Note — première note'), 'BACKLOG contient note 1 (titre 
 ok(bl.includes('  > ligne2'), 'note multiligne quotée');
 ok(bl.indexOf('## À faire') < bl.indexOf('📝 Note') && bl.indexOf('📝 Note') < bl.indexOf('## Done'), 'inséré entre marqueur et Done');
 ok(bl.indexOf('deuxième') < bl.indexOf('première'), 'plus récente en haut (newest-first)');
+
+// 3b) drainNotes — idempotency : note déjà dans BACKLOG (drain précédent où /processed avait échoué)
+console.log('drainNotes idempotency');
+const backlogIdem = join(tmpdir(), `BACKLOG_IDEM_${Date.now()}.md`);
+// Simule un BACKLOG qui contient déjà la note s3 (drain précédent réussi mais mark-processed échoué).
+await fs.writeFile(backlogIdem, [
+    '# Backlog', '', '## À faire', '',
+    '- **Dernière maj** : 2026-01-01 — ingérée depuis le widget (note s3)', '', '## Done', '',
+].join('\n'), 'utf8');
+const serverNotesIdem = [{ id: 's3', text: 'déjà drainée', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvIdem = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/api/notes')) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ notes: serverNotesIdem.filter(n => n.status === 'pending') }));
+    }
+    const m = req.url.match(/^\/api\/notes\/([^/]+)\/processed$/);
+    if (req.method === 'POST' && m) {
+        const n = serverNotesIdem.find(x => x.id === decodeURIComponent(m[1]));
+        if (n) n.status = 'processed';
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ ok: !!n }));
+    }
+    res.statusCode = 404; res.end('{}');
+});
+await new Promise(r => srvIdem.listen(0, r));
+const portIdem = srvIdem.address().port;
+const resultIdem = await drainNotes({ baseUrl: `http://127.0.0.1:${portIdem}`, backlogPath: backlogIdem, marker: '## À faire' });
+srvIdem.close();
+const blIdem = await fs.readFile(backlogIdem, 'utf8');
+ok(resultIdem.drained === 1, 'idempotency: note marquée processed même si déjà dans BACKLOG');
+ok((blIdem.match(/note s3/g) || []).length === 1, 'idempotency: note s3 non dupliquée dans BACKLOG');
+await fs.rm(backlogIdem, { force: true });
 
 // 4) categorize — règles, défaut, égalité, fallback LLM
 console.log('categorize');

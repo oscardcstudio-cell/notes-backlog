@@ -6,8 +6,9 @@
  *
  * Endpoints montés (relatifs au mount point, ex: app.use('/api/notes', router)) :
  *   POST   /            { text }                 → crée une note (status=pending)
- *   GET    /            ?status=pending|processed → liste les notes
+ *   GET    /            ?status=pending|processed|abandoned → liste les notes
  *   POST   /:id/processed  { backlog_ref? }       → marque une note traitée
+ *   POST   /:id/abandoned  { reason? }            → marque une note abandonnée (rejetée)
  *
  * Forme d'une note :
  *   { id, text, created_at, status: 'pending'|'processed', processed_at, backlog_ref? }
@@ -36,10 +37,11 @@ function newId() {
  * @returns {import('express').Router}
  *
  * Contrat `store` (toutes méthodes async-friendly, peuvent retourner une Promise) :
- *   list()                 → Note[]      (plus récentes en premier)
- *   add(note)              → void        (insère en tête)
- *   markProcessed(id, ref) → Note|null   (passe status→processed, set processed_at + backlog_ref)
- *   prune(max)             → void        (optionnel ; tronque à `max`)
+ *   list()                      → Note[]    (plus récentes en premier)
+ *   add(note)                   → void      (insère en tête)
+ *   markProcessed(id, ref)      → Note|null (passe status→processed, set processed_at + backlog_ref)
+ *   markAbandoned(id, reason?)  → Note|null (passe status→abandoned, set abandoned_at + reason)
+ *   prune(max)                  → void      (optionnel ; tronque à `max`)
  */
 export function createNotesRouter(opts = {}) {
     const { store, auth, onCreate } = opts;
@@ -92,6 +94,18 @@ export function createNotesRouter(opts = {}) {
         try {
             const ref = req.body?.backlog_ref ? String(req.body.backlog_ref).slice(0, 200) : undefined;
             const note = await store.markProcessed(req.params.id, ref);
+            if (!note) return res.status(404).json({ error: `unknown note id "${req.params.id}"` });
+            res.json({ ok: true, note });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // POST /:id/abandoned — marquer abandonnée (rejetée sans drain)
+    router.post('/:id/abandoned', express.json({ limit: '4kb' }), async (req, res) => {
+        try {
+            const reason = req.body?.reason ? String(req.body.reason).slice(0, 200) : undefined;
+            const note = await store.markAbandoned(req.params.id, reason);
             if (!note) return res.status(404).json({ error: `unknown note id "${req.params.id}"` });
             res.json({ ok: true, note });
         } catch (e) {

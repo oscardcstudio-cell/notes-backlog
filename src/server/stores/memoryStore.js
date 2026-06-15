@@ -15,6 +15,14 @@ export function createMemoryStore() {
             if (ref) n.backlog_ref = ref;
             return n;
         },
+        markAbandoned: (id, reason) => {
+            const n = notes.find(x => x.id === id);
+            if (!n) return null;
+            n.status = 'abandoned';
+            n.abandoned_at = new Date().toISOString();
+            if (reason) n.reason = reason;
+            return n;
+        },
         prune: (max) => { if (notes.length > max) notes.length = max; },
     };
 }

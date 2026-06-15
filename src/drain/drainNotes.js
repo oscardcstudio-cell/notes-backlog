@@ -43,6 +43,10 @@ function normalize(s) {
  * 2. Keyword matching en fallback (via: 'keywords').
  * Retourne le sujet gagnant enrichi de `via`, ou null.
  *
+ * TODO: refactoriser — la passe 2 (keyword matching) duplique `categorizeByRules`
+ * de categorize.js. L'aliasMap de la passe 1 est hardcodé et casse la philosophie
+ * "cœur agnostique" — à sortir en option config injectée par le caller.
+ *
  * @param {string} text
  * @param {Array<{id, keywords?, filePath?, marker?}>} subjects
  */
@@ -80,9 +84,15 @@ export function categorizeBySubject(text, subjects) {
     return bestScore > 0 ? { ...best, via: 'keywords' } : null;
 }
 
-/** Insère un item TODO juste après le marker dans BACKLOG.md. */
+/**
+ * Insère un item TODO juste après le marker dans BACKLOG.md.
+ * Retourne true si inséré, false si déjà présent (idempotent — guard race-condition :
+ * si le drain précédent a écrit le BACKLOG mais échoué à appeler /processed, la note
+ * resterait pending et serait re-drainée → doublon sans cette vérification).
+ */
 async function appendToBacklog(backlogPath, marker, note, phaseLabel) {
     const raw = await fs.readFile(backlogPath, 'utf8');
+    if (raw.includes(`note ${note.id}`)) return false;
     const idx = raw.indexOf(marker);
     if (idx === -1) throw new Error(`"${marker}" introuvable dans ${backlogPath}`);
 
@@ -103,6 +113,7 @@ async function appendToBacklog(backlogPath, marker, note, phaseLabel) {
     const insertAt = idx + marker.length;
     const updated = raw.slice(0, insertAt) + '\n' + block + raw.slice(insertAt);
     await fs.writeFile(backlogPath, updated, 'utf8');
+    return true;
 }
 
 /**
@@ -182,15 +193,17 @@ export async function drainNotes(opts = {}) {
             }
 
             // 1. BACKLOG.md
+            let written = false;
             try {
-                await appendToBacklog(backlogPath, targetMarker, note, phaseLabel);
+                written = await appendToBacklog(backlogPath, targetMarker, note, phaseLabel);
             } catch (e) {
-                if (targetMarker !== marker) await appendToBacklog(backlogPath, marker, note, phaseLabel);
+                if (targetMarker !== marker) written = await appendToBacklog(backlogPath, marker, note, phaseLabel);
                 else throw e;
             }
+            if (!written) log(`⚠ note ${note.id} déjà dans BACKLOG — skip écriture (idempotent)`);
 
-            // 2. notes/<sujet>.md (subjects filePath-based)
-            if (subjects && notesDir) {
+            // 2. notes/<sujet>.md — seulement si note fraîchement insérée (évite le double-write sur re-drain)
+            if (written && subjects && notesDir) {
                 const subject = categorizeBySubject(note.text, subjects);
                 if (subject) {
                     const filePath = path.join(notesDir, subject.filePath);

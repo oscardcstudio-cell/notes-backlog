@@ -1,6 +1,6 @@
 {
   "name": "notes-backlog",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI. Extrait d'Auto-Polymarket.",
   "type": "module",
   "license": "MIT",
