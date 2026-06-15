@@ -34,7 +34,8 @@
     "react": { "optional": true }
   },
   "scripts": {
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node scripts/check-vendored.mjs",
+    "check:vendored": "node scripts/check-vendored.mjs"
   },
   "keywords": ["notes", "backlog", "express", "react", "widget", "todo", "categorize", "triage", "coverage", "traceability", "rtm", "roadmap"]
 }
