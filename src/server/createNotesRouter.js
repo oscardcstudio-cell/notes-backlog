@@ -81,8 +81,12 @@ export function createNotesRouter(opts = {}) {
     router.get('/', async (req, res) => {
         try {
             const notes = (await store.list()) || [];
-            const status = req.query.status;
-            const filtered = status ? notes.filter(n => n.status === status) : notes;
+            // ?status=a&status=b → Express donne un ARRAY → n.status === [array] est
+            // toujours false → liste vide silencieuse. On normalise en string (1er élément
+            // si array) pour garder une comparaison scalaire fiable.
+            const rawStatus = req.query.status;
+            const status = Array.isArray(rawStatus) ? rawStatus[0] : rawStatus;
+            const filtered = status ? notes.filter(n => n.status === String(status)) : notes;
             res.json({ notes: filtered, total: notes.length });
         } catch (e) {
             res.status(500).json({ error: e.message });

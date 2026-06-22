@@ -1,10 +1,14 @@
 {
   "name": "notes-backlog",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI. Extrait d'Auto-Polymarket.",
   "type": "module",
   "license": "MIT",
   "author": "Oscar de Canecaude",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oscardcstudio-cell/notes-backlog.git"
+  },
   "exports": {
     "./server": "./src/server/createNotesRouter.js",
     "./server/stores/memory": "./src/server/stores/memoryStore.js",

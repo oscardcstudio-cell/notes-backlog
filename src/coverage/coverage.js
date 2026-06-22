@@ -34,6 +34,24 @@ function normalize(s) {
     return stripAccents(String(s || '').toLowerCase()).replace(/\s+/g, ' ').trim();
 }
 
+/** Échappe les métacaractères regex d'une chaîne (ancre = data arbitraire). */
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Une ancre est-elle présente dans le plan sur des FRONTIÈRES d'ancre ?
+ * `includes` brut donnait des faux positifs : "p4" matchait "p40"/"sp4" → faux "linked"
+ * (l'échec exact que ce module prétend détecter). On exige que l'ancre ne soit pas
+ * collée à un caractère alphanumérique de part et d'autre (lookaround sur [a-z0-9]).
+ */
+function anchorInPlan(anchor, planNorm) {
+    const a = normalize(anchor);
+    if (!a) return false;
+    const re = new RegExp(`(?<![a-z0-9])${escapeRegExp(a)}(?![a-z0-9])`);
+    return re.test(planNorm);
+}
+
 // Item de liste markdown, indentation tolérée : -, *, +, 1. ; checkbox [ ]/[x] optionnelle.
 const DEFAULT_ITEM_PATTERN = /^[ \t]*(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(.+?)\s*$/;
 
@@ -106,8 +124,8 @@ export function checkCoverage(backlogText, planText, opts = {}) {
 
     for (const it of all) {
         if (it.anchors.length > 0) {
-            const resolved = it.anchors.filter(a => planNorm.includes(normalize(a)));
-            const missing = it.anchors.filter(a => !planNorm.includes(normalize(a)));
+            const resolved = it.anchors.filter(a => anchorInPlan(a, planNorm));
+            const missing = it.anchors.filter(a => !anchorInPlan(a, planNorm));
             if (resolved.length > 0 && missing.length === 0) {
                 linked.push({ ...it, resolved });
             } else {

@@ -29,11 +29,23 @@ export function createJsonFileStore(filePath) {
         }
     }
 
+    let tmpCounter = 0;
     async function writeAtomic(notes) {
         await fs.mkdir(dirname(filePath), { recursive: true });
-        const tmp = `${filePath}.tmp`;
-        await fs.writeFile(tmp, JSON.stringify(notes, null, 2), 'utf8');
-        await fs.rename(tmp, filePath);
+        // tmp à nom UNIQUE (pid + compteur + timestamp) : la chaîne writeChain ne
+        // sérialise que DANS ce process — deux process visant le même fichier
+        // partageraient un tmp à nom fixe et le corrompraient. Hypothèse de design :
+        // single-writer (un seul process écrit ce fichier) ; le tmp unique évite la
+        // corruption croisée du tmp si l'hypothèse est violée, le rename restant atomique.
+        const tmp = `${filePath}.${process.pid}.${tmpCounter++}.${Date.now()}.tmp`;
+        try {
+            await fs.writeFile(tmp, JSON.stringify(notes, null, 2), 'utf8');
+            await fs.rename(tmp, filePath);
+        } catch (e) {
+            // stringify/writeFile/rename a throw → nettoyer le tmp orphelin.
+            await fs.unlink(tmp).catch(() => {});
+            throw e;
+        }
     }
 
     // Mutation sérialisée : lit l'état courant, applique `mutator`, réécrit.

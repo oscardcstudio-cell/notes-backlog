@@ -110,6 +110,57 @@ ok(resultIdem.drained === 1, 'idempotency: note marquée processed même si déj
 ok((blIdem.match(/note s3/g) || []).length === 1, 'idempotency: note s3 non dupliquée dans BACKLOG');
 await fs.rm(backlogIdem, { force: true });
 
+// 3c) drainNotes — régression collision de préfixe d'ID (s3 vs s30).
+// Le BACKLOG contient déjà s30 ; drainer s3 ne doit PAS être faussement « déjà présent »
+// (l'ancien guard par substring `note s3` matchait `note s30` → idée perdue).
+console.log('drainNotes prefix-collision (s3 vs s30)');
+const backlogPfx = join(tmpdir(), `BACKLOG_PFX_${Date.now()}.md`);
+await fs.writeFile(backlogPfx, [
+    '# Backlog', '', '## À faire', '',
+    '- **Dernière maj** : 2026-01-01 — ingérée depuis le widget (note s30)', '', '## Done', '',
+].join('\n'), 'utf8');
+const notesPfx = [{ id: 's3', text: 'note courte', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvPfx = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/api/notes')) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ notes: notesPfx.filter(n => n.status === 'pending') }));
+    }
+    const m = req.url.match(/^\/api\/notes\/([^/]+)\/processed$/);
+    if (req.method === 'POST' && m) { const n = notesPfx.find(x => x.id === decodeURIComponent(m[1])); if (n) n.status = 'processed'; res.end('{}'); return; }
+    res.statusCode = 404; res.end('{}');
+});
+await new Promise(r => srvPfx.listen(0, r));
+const portPfx = srvPfx.address().port;
+const resPfx = await drainNotes({ baseUrl: `http://127.0.0.1:${portPfx}`, backlogPath: backlogPfx, marker: '## À faire' });
+srvPfx.close();
+const blPfx = await fs.readFile(backlogPfx, 'utf8');
+ok(resPfx.drained === 1, 'prefix: s3 bien drainée malgré s30 présent');
+ok(blPfx.includes('(note s3)') && blPfx.includes('(note s30)'), 'prefix: s3 ET s30 présents (pas de faux skip)');
+await fs.rm(backlogPfx, { force: true });
+
+// 3d) drainNotes — poison-pill : note sans champ texte ne doit pas crasher (boucle d'erreur).
+console.log('drainNotes poison-pill (note sans texte)');
+const backlogPoison = join(tmpdir(), `BACKLOG_POISON_${Date.now()}.md`);
+await fs.writeFile(backlogPoison, '# Backlog\n\n## À faire\n\n## Done\n', 'utf8');
+const notesPoison = [{ id: 'p1', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }]; // text absent
+const srvPoison = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/api/notes')) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ notes: notesPoison.filter(n => n.status === 'pending') }));
+    }
+    const m = req.url.match(/^\/api\/notes\/([^/]+)\/processed$/);
+    if (req.method === 'POST' && m) { const n = notesPoison.find(x => x.id === decodeURIComponent(m[1])); if (n) n.status = 'processed'; res.end('{}'); return; }
+    res.statusCode = 404; res.end('{}');
+});
+await new Promise(r => srvPoison.listen(0, r));
+const portPoison = srvPoison.address().port;
+const resPoison = await drainNotes({ baseUrl: `http://127.0.0.1:${portPoison}`, backlogPath: backlogPoison, marker: '## À faire' });
+srvPoison.close();
+const blPoison = await fs.readFile(backlogPoison, 'utf8');
+ok(resPoison.drained === 1, 'poison-pill: note sans texte drainée sans crash');
+ok(blPoison.includes('📝 Note — (sans titre)'), 'poison-pill: titre fallback (sans titre)');
+await fs.rm(backlogPoison, { force: true });
+
 // 4) categorize — règles, défaut, égalité, fallback LLM
 console.log('categorize');
 const { categorize, categorizeByRules } = await import('../src/categorize/categorize.js');
@@ -196,6 +247,13 @@ const fullCov = checkCoverage('- [ ] A [[X]]', '# plan\nX présent ici');
 ok(fullCov.summary.orphans === 0, 'tout couvert → orphans=0 (gate verte)');
 ok(checkCoverage(backlogMd, planMd, { includeDone: true }).summary.total === 6, 'includeDone=true → 6 items');
 ok(formatCoverageReport(cov).includes('Liens cassés'), 'rapport markdown généré');
+
+// anchor frontier : "P4" ne doit PAS être résolu par substring dans "P40"/"SP4"
+const frontier = checkCoverage('- [ ] feature [[P4]]', '# plan\nVoir P40 et SP4 plus loin.');
+ok(frontier.linked.length === 0, 'frontier: [[P4]] non résolu par P40/SP4 (pas de faux linked)');
+ok(frontier.broken.some(i => i.missing.includes('P4')), 'frontier: [[P4]] → broken (absent en tant qu\'ancre exacte)');
+const frontierOk = checkCoverage('- [ ] feature [[P4]]', '# plan\nPhase P4 livrée.');
+ok(frontierOk.linked.length === 1, 'frontier: [[P4]] résolu sur frontière de mot exacte');
 
 // cleanup
 await fs.rm(f, { force: true }); await fs.rm(`${f}.tmp`, { force: true }); await fs.rm(backlog, { force: true });

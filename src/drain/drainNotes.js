@@ -52,7 +52,10 @@ function normalize(s) {
  */
 export function categorizeBySubject(text, subjects) {
     // Passe 1 — préfixe "note <alias>: …"
-    const prefixMatch = text.match(/^note\s+([a-z\-]+)\s*:/i);
+    // On matche sur le texte SANS accents : la classe [a-z\-] ne couvre pas les
+    // lettres accentuées, donc "note idée:" retombait en keywords sans ce stripAccents
+    // appliqué AVANT le match (et non seulement dans normalize() après).
+    const prefixMatch = stripAccents(String(text || '')).match(/^note\s+([a-z\-]+)\s*:/i);
     if (prefixMatch) {
         const alias = normalize(prefixMatch[1]);
         const aliasMap = {
@@ -92,19 +95,24 @@ export function categorizeBySubject(text, subjects) {
  */
 async function appendToBacklog(backlogPath, marker, note, phaseLabel) {
     const raw = await fs.readFile(backlogPath, 'utf8');
-    if (raw.includes(`note ${note.id}`)) return false;
+    // Guard idempotency ancré sur le marqueur EXACT écrit plus bas — `(note <id>)` avec
+    // parenthèses. Sans le `)` fermant, un ID court préfixe d'un autre (s3 vs s30) donnait
+    // un faux « déjà présent » → note jamais écrite mais marquée processed = idée perdue.
+    if (raw.includes(`(note ${note.id})`)) return false;
     const idx = raw.indexOf(marker);
     if (idx === -1) throw new Error(`"${marker}" introuvable dans ${backlogPath}`);
 
     const date = (note.created_at || new Date().toISOString()).slice(0, 10);
-    const firstLine = (note.text || '').split('\n')[0].slice(0, 80).trim();
+    // Première ligne NON vide (une note commençant par '\n' donnait un titre vide), avec
+    // garde null : note.text absent/null ne doit pas crasher (poison-pill re-drainé en boucle).
+    const firstLine = (note.text || '').split('\n').map(l => l.trim()).find(Boolean)?.slice(0, 80) || '(sans titre)';
     const block = [
         ``,
         `### [LOW][TODO] 📝 Note — ${firstLine}`,
         `- **Découvert** : ${date} — saisie via le widget de notes`,
         ...(phaseLabel ? [`- **Phase** : ${phaseLabel}`] : []),
         `- **Note** :`,
-        ...note.text.split('\n').map(l => `  > ${l}`),
+        ...(note.text || '').split('\n').map(l => `  > ${l}`),
         `- **Action** : trier — convertir en item structuré, traiter, ou archiver`,
         `- **Dernière maj** : ${date} — ingérée depuis le widget (note ${note.id})`,
         ``,
@@ -127,7 +135,7 @@ async function appendToNotesFile(filePath, note) {
         return false;
     }
     const date = (note.created_at || new Date().toISOString()).slice(0, 10);
-    const text = note.text.replace(/\r?\n+/g, ' / ').trim();
+    const text = (note.text || '').replace(/\r?\n+/g, ' / ').trim();
     await fs.appendFile(filePath, `- [${date}] ${text} — _(source: widget)_\n`, 'utf8');
     return true;
 }
