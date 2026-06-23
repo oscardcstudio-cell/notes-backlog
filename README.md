@@ -7,26 +7,38 @@ Trois briques indépendantes :
 
 | Brique | Import | Rôle |
 |---|---|---|
-| **Backend** | `notes-backlog/server` | Routeur Express (POST/GET note, mark processed) |
+| **Backend** | `notes-backlog/server` | Routeur Express (POST/GET note, mark processed/abandoned) |
 | **Widget** | `notes-backlog/client` | Composant React flottant autonome (sans dépendance UI) |
 | **Drain** | `notes-backlog/drain` | CLI/fonction : notes pending → `BACKLOG.md` → marque traité |
 | **Coverage** | `notes-backlog/coverage` | CLI/fonction : croise `BACKLOG.md` ↔ `ROADMAP.md`, signale les idées orphelines (mini-RTM) |
+| **Categorize** | `notes-backlog/categorize` | Range une note dans une catégorie (règles + LLM injecté), agnostique |
+| **Presets** | `notes-backlog/presets/company-phases` | Data optionnelle : 8 phases du `COMPANY_PLAYBOOK.md` |
 
 Flux : on saisit une note dans le widget → POST stockée (`pending`) → un cron lance le drain → la note atterrit dans `BACKLOG.md` et passe `processed`.
 
 ## Installation
 
-Pas encore publié sur npm. Consommation locale :
+Consommé en dépendance versionnée (jamais vendorisé — cf. `VENDORED.md`) :
 
 ```bash
-npm install file:../packages/notes-backlog      # depuis un projet voisin
-# ou, une fois poussé sur GitHub perso :
-npm install github:oscardcstudio-cell/notes-backlog
+# recommandé (marche en Docker/Railway ET en clone standalone) :
+npm install github:oscardcstudio-cell/notes-backlog#v1.5.0
+# ou, en dev local depuis un projet voisin :
+npm install file:../packages/notes-backlog
 ```
 
 `express` (≥4) et `react` (≥17) sont des peerDependencies optionnelles — chaque brique n'en charge qu'une.
 
 ## Backend
+
+Endpoints montés (relatifs au mount point) :
+
+```
+POST   /                { text }                   → crée une note (status=pending)
+GET    /                ?status=pending|processed|abandoned → liste (status validé)
+POST   /:id/processed   { backlog_ref? }           → marque traitée
+POST   /:id/abandoned   { reason? }                → marque abandonnée (rejetée sans drain)
+```
 
 ```js
 import { createNotesRouter } from 'notes-backlog/server';
@@ -35,22 +47,27 @@ import { createJsonFileStore } from 'notes-backlog/server/stores/json-file';
 const store = createJsonFileStore('./data/notes.json');
 app.use('/api/notes', createNotesRouter({
     store,
-    auth: requireAdmin,        // middleware Express optionnel
+    auth: requireAdmin,        // middleware Express — SANS lui les endpoints sont publics (warn)
+    enforceAuth: true,         // optionnel : throw au montage si `auth` absent
     maxNoteLen: 2000,
     maxNotesKept: 100,
-    onCreate: (note) => {/* flush DB, log, … */},
+    onCreate: (note) => {/* flush DB, log, … */},  // appelé AVANT prune
 }));
 ```
+
+> ⚠ Sans `auth`, tous les endpoints (dont l'écriture disque) sont **publics**. Le montage
+> émet un warn ; passe `enforceAuth: true` pour refuser un montage non protégé en prod.
 
 ### Contrat `store` (adaptateur de stockage)
 
 Branche n'importe quelle persistance en implémentant :
 
 ```
-list()                 → Note[]      (plus récentes en premier)
-add(note)              → void        (insère en tête)
-markProcessed(id, ref) → Note|null   (status→processed + processed_at + backlog_ref)
-prune(max)             → void        (optionnel)
+list()                     → Note[]      (plus récentes en premier)
+add(note)                  → void        (insère en tête)
+markProcessed(id, ref)     → Note|null   (status→processed + processed_at + backlog_ref)
+markAbandoned(id, reason?) → Note|null   (status→abandoned + abandoned_at + reason)
+prune(max)                 → void        (optionnel)
 ```
 
 Stores fournis : `notes-backlog/server/stores/memory` (volatile) et `.../json-file`
@@ -64,7 +81,9 @@ qui respecte ce contrat — c'est ~30 lignes.
 
 ```json
 { "id": "note_...", "text": "...", "created_at": "ISO",
-  "status": "pending|processed", "processed_at": null, "backlog_ref": "..." }
+  "status": "pending|processed|abandoned",
+  "processed_at": null, "backlog_ref": "...",
+  "abandoned_at": null, "reason": "..." }
 ```
 
 ## Widget React
@@ -151,6 +170,24 @@ const { id, marker, via } = await categorize('tester le pricing', companyPhases)
 
 Le preset `company-phases` mappe les notes sur les 8 phases du `COMPANY_PLAYBOOK.md`
 (start-up-box) → une note connaît la phase à laquelle la traiter.
+
+### Double-write `notes/<sujet>.md` (réservoir par sujet, optionnel)
+
+En plus du BACKLOG, le drain peut déposer chaque note dans un fichier-réservoir par
+sujet (`notes/<sujet>.md`), où la note est *invoquée* par le plan quand sa phase démarre :
+
+```js
+await drainNotes({
+    baseUrl, backlogPath, marker: '## À trier',
+    subjects: [{ id: 'tech-ops', filePath: 'tech-ops.md', keywords: ['api', 'infra'] }],
+    notesDir: '/abs/path/.planning/notes',     // les filePath sont résolus SOUS ce dossier
+    subjectAliasMap: { infra: 'tech-ops', ops: 'tech-ops' },  // alias du préfixe "note <alias>:"
+});
+```
+
+Routage : préfixe explicite `note <alias>:` d'abord (résolu via `subjectAliasMap`), sinon
+keyword matching. Fichier sujet absent → skip (BACKLOG seul). `filePath` qui s'échappe de
+`notesDir` (`..`, absolu) → rejeté (anti path-traversal).
 
 ## Couverture backlog ↔ plan (mini-RTM, "lisseur d'idées")
 

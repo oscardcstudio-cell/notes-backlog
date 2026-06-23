@@ -13,6 +13,7 @@
 
 import { promises as fs } from 'fs';
 import { dirname } from 'path';
+import { randomUUID } from 'crypto';
 
 export function createJsonFileStore(filePath) {
     if (!filePath) throw new Error('createJsonFileStore: filePath requis');
@@ -29,15 +30,13 @@ export function createJsonFileStore(filePath) {
         }
     }
 
-    let tmpCounter = 0;
     async function writeAtomic(notes) {
         await fs.mkdir(dirname(filePath), { recursive: true });
-        // tmp à nom UNIQUE (pid + compteur + timestamp) : la chaîne writeChain ne
-        // sérialise que DANS ce process — deux process visant le même fichier
-        // partageraient un tmp à nom fixe et le corrompraient. Hypothèse de design :
-        // single-writer (un seul process écrit ce fichier) ; le tmp unique évite la
-        // corruption croisée du tmp si l'hypothèse est violée, le rename restant atomique.
-        const tmp = `${filePath}.${process.pid}.${tmpCounter++}.${Date.now()}.tmp`;
+        // tmp à nom UNIQUE (pid + uuid + timestamp) : la chaîne writeChain ne sérialise
+        // que DANS ce process. Deux process (PID recyclés en conteneur) partageant un tmp
+        // à nom fixe le corrompraient — l'uuid l'évite. Hypothèse de design : single-writer ;
+        // le rename reste atomique.
+        const tmp = `${filePath}.${process.pid}.${randomUUID()}.${Date.now()}.tmp`;
         try {
             await fs.writeFile(tmp, JSON.stringify(notes, null, 2), 'utf8');
             await fs.rename(tmp, filePath);
@@ -48,38 +47,46 @@ export function createJsonFileStore(filePath) {
         }
     }
 
-    // Mutation sérialisée : lit l'état courant, applique `mutator`, réécrit.
+    // Mutation sérialisée : lit l'état courant, applique `mutator`, réécrit SI muté.
+    // `mutator` retourne { value, changed } — on n'écrit pas le fichier sur un no-op
+    // (markProcessed/markAbandoned sur id inconnu) : évite une réécriture inutile et
+    // une fenêtre d'I/O sans raison à chaque 404.
     function mutate(mutator) {
         const next = writeChain.then(async () => {
             const notes = await read();
-            const result = await mutator(notes);
-            await writeAtomic(notes);
-            return result;
+            const { value, changed } = await mutator(notes);
+            if (changed) await writeAtomic(notes);
+            return value;
         });
         writeChain = next.then(() => {}, () => {}); // ne casse pas la chaîne sur erreur
         return next;
     }
 
     return {
-        list: () => read(),
-        add: (note) => mutate(notes => { notes.unshift(note); }),
+        // list chaîné sur writeChain : reflète l'état COMMITÉ (un list() juste après un
+        // add() non-attendu voit bien la note, plutôt qu'un état d'avant rename).
+        list: () => writeChain.then(() => read()),
+        add: (note) => mutate(notes => { notes.unshift(note); return { value: undefined, changed: true }; }),
         markProcessed: (id, ref) => mutate(notes => {
             const n = notes.find(x => x.id === id);
-            if (!n) return null;
+            if (!n) return { value: null, changed: false };
             n.status = 'processed';
             n.processed_at = new Date().toISOString();
             if (ref) n.backlog_ref = ref;
-            return n;
+            return { value: n, changed: true };
         }),
         markAbandoned: (id, reason) => mutate(notes => {
             const n = notes.find(x => x.id === id);
-            if (!n) return null;
+            if (!n) return { value: null, changed: false };
             n.status = 'abandoned';
             n.abandoned_at = new Date().toISOString();
             if (reason) n.reason = reason;
-            return n;
+            return { value: n, changed: true };
         }),
-        prune: (max) => mutate(notes => { if (notes.length > max) notes.length = max; }),
+        prune: (max) => mutate(notes => {
+            if (notes.length > max) { notes.length = max; return { value: undefined, changed: true }; }
+            return { value: undefined, changed: false };
+        }),
     };
 }
 

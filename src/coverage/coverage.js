@@ -24,32 +24,16 @@
 
 import { promises as fs } from 'fs';
 import { pathToFileURL } from 'url';
-
-function stripAccents(s) {
-    return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
-}
-
-/** Normalise pour comparaison : sans accents, minuscules, espaces compactés. */
-function normalize(s) {
-    return stripAccents(String(s || '').toLowerCase()).replace(/\s+/g, ' ').trim();
-}
-
-/** Échappe les métacaractères regex d'une chaîne (ancre = data arbitraire). */
-function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { normalizeSpace as normalize, containsWord } from '../util/text.js';
 
 /**
  * Une ancre est-elle présente dans le plan sur des FRONTIÈRES d'ancre ?
  * `includes` brut donnait des faux positifs : "p4" matchait "p40"/"sp4" → faux "linked"
  * (l'échec exact que ce module prétend détecter). On exige que l'ancre ne soit pas
- * collée à un caractère alphanumérique de part et d'autre (lookaround sur [a-z0-9]).
+ * collée à un caractère alphanumérique de part et d'autre (cf. util/text.containsWord).
  */
 function anchorInPlan(anchor, planNorm) {
-    const a = normalize(anchor);
-    if (!a) return false;
-    const re = new RegExp(`(?<![a-z0-9])${escapeRegExp(a)}(?![a-z0-9])`);
-    return re.test(planNorm);
+    return containsWord(planNorm, normalize(anchor));
 }
 
 // Item de liste markdown, indentation tolérée : -, *, +, 1. ; checkbox [ ]/[x] optionnelle.
@@ -97,10 +81,11 @@ export function parseItems(backlogText, opts = {}) {
     return items;
 }
 
-/** Tokens significatifs d'un titre (≥4 chars, hors stopwords FR/EN courants). */
-const STOPWORDS = new Set('avec dans pour sur les des une un le la de du et ou est sont cette ces que qui quoi mais donc plus pas faire fait this that with from have will into your then than been about'.split(' '));
-function tokens(s) {
-    return normalize(s).split(/[^a-z0-9]+/).filter(t => t.length >= 4 && !STOPWORDS.has(t));
+/** Stopwords FR/EN par défaut — surchargeable via opts.stopwords (cohérence agnostique). */
+const DEFAULT_STOPWORDS = new Set('avec dans pour sur les des une un le la de du et ou est sont cette ces que qui quoi mais donc plus pas faire fait this that with from have will into your then than been about'.split(' '));
+/** Tokens significatifs d'un titre (≥4 chars, hors stopwords). */
+function tokens(s, stopwords = DEFAULT_STOPWORDS) {
+    return normalize(s).split(/[^a-z0-9]+/).filter(t => t.length >= 4 && !stopwords.has(t));
 }
 
 /**
@@ -112,11 +97,14 @@ function tokens(s) {
  * @param {RegExp} [opts.anchorPattern]    — extraction des anchors (défaut: [[..]] / → / ref:)
  * @param {boolean}[opts.includeDone=false]— compter aussi les items cochés [x]
  * @param {number} [opts.suggestMinTokens=2] — n tokens partagés pour SUGGÉRER (pas affirmer) une présence
+ * @param {Set<string>|string[]} [opts.stopwords] — stopwords du matching flou (défaut FR/EN)
  * @returns {{linked:[], broken:[], unlinked:[], summary:{total,linked,broken,unlinked,orphans}}}
  */
 export function checkCoverage(backlogText, planText, opts = {}) {
     const includeDone = opts.includeDone === true;
     const suggestMinTokens = Number.isFinite(opts.suggestMinTokens) ? opts.suggestMinTokens : 2;
+    const stopwords = opts.stopwords instanceof Set ? opts.stopwords
+        : Array.isArray(opts.stopwords) ? new Set(opts.stopwords) : DEFAULT_STOPWORDS;
     const planNorm = normalize(planText);
 
     const all = parseItems(backlogText, opts).filter(it => includeDone || !it.done);
@@ -134,7 +122,9 @@ export function checkCoverage(backlogText, planText, opts = {}) {
         } else {
             // Pas d'anchor : on classe orphelin, mais on SUGGÈRE une présence possible.
             const titleInPlan = it.title && planNorm.includes(normalize(it.title));
-            const shared = tokens(it.title).filter(t => planNorm.includes(t));
+            // Frontière de mot (pas substring) : "data" ne doit pas suggérer via "database",
+            // "auth" via "authority". Aligné sur anchorInPlan (cohérence du module).
+            const shared = tokens(it.title, stopwords).filter(t => containsWord(planNorm, t));
             const maybeInPlan = Boolean(titleInPlan) || shared.length >= suggestMinTokens;
             unlinked.push({ ...it, maybeInPlan, sharedTokens: shared });
         }

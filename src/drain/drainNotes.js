@@ -24,119 +24,168 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { categorize, categorizeByRules } from '../categorize/categorize.js';
+import { stripAccents, normalize, escapeRegExp } from '../util/text.js';
+
+// Garde-fou taille : un store custom (Postgres) ou une note injectée hors API
+// (qui borne à maxNoteLen) peut contenir un texte géant. On re-borne dans le drain
+// avant tout traitement regex/écriture (anti-DoS, cf. audit sécu).
+const MAX_DRAIN_TEXT = 20000;
 
 function log(msg) {
     process.stdout.write(`[${new Date().toISOString()}] [notes-drain] ${msg}\n`);
 }
 
-function stripAccents(s) {
-    return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
-}
-
-function normalize(s) {
-    return stripAccents(String(s || '').toLowerCase());
+/** Tronque le texte d'une note à une borne dure (défensif côté drain). */
+function boundedText(note) {
+    return String(note.text || '').slice(0, MAX_DRAIN_TEXT);
 }
 
 /**
- * Catégorise une note — deux passes :
+ * Neutralise une ligne de note pour qu'elle ne puisse pas être confondue avec un
+ * marqueur de section du BACKLOG. Le repérage du marker est ancré en début de ligne
+ * (cf. findMarkerInsert), donc une ligne quotée `  > ## x` ne casse déjà plus
+ * l'insertion ; ici on échappe en plus tout heading ATX en tête de ligne (`## …` →
+ * `\## …`) pour qu'un parseur markdown aval ne le lise pas comme une section.
+ */
+function neutralizeLine(line) {
+    return String(line).replace(/^(\s*)(#{1,6}\s)/, '$1\\$2');
+}
+
+/**
+ * Catégorise une note vers un SUJET (notes/<sujet>.md) — deux passes :
  * 1. Préfixe explicite "note <alias>: …" → résolution directe (via: 'prefix').
- * 2. Keyword matching en fallback (via: 'keywords').
+ * 2. Keyword matching en fallback (via: 'keywords') — délègue à categorizeByRules
+ *    (plus de duplication ; détection de tie héritée).
  * Retourne le sujet gagnant enrichi de `via`, ou null.
- *
- * TODO: refactoriser — la passe 2 (keyword matching) duplique `categorizeByRules`
- * de categorize.js. L'aliasMap de la passe 1 est hardcodé et casse la philosophie
- * "cœur agnostique" — à sortir en option config injectée par le caller.
  *
  * @param {string} text
  * @param {Array<{id, keywords?, filePath?, marker?}>} subjects
+ * @param {Object<string,string>} [aliasMap] — map alias→id injectée par le caller
+ *        (cœur agnostique : aucune taxonomie hardcodée). Sans map, l'alias = l'id.
  */
-export function categorizeBySubject(text, subjects) {
+export function categorizeBySubject(text, subjects, aliasMap = {}) {
     // Passe 1 — préfixe "note <alias>: …"
-    // On matche sur le texte SANS accents : la classe [a-z\-] ne couvre pas les
-    // lettres accentuées, donc "note idée:" retombait en keywords sans ce stripAccents
-    // appliqué AVANT le match (et non seulement dans normalize() après).
-    const prefixMatch = stripAccents(String(text || '')).match(/^note\s+([a-z\-]+)\s*:/i);
+    // Match sur le texte SANS accents (la classe ne couvre pas les accentuées) ; on
+    // accepte chiffres et tirets dans l'alias ("note p4:", "note tech-ops:").
+    const prefixMatch = stripAccents(String(text || '')).match(/^note\s+([a-z0-9-]+)\s*:/i);
     if (prefixMatch) {
         const alias = normalize(prefixMatch[1]);
-        const aliasMap = {
-            'produit': 'produit', 'ux': 'produit', 'ui': 'produit', 'design': 'produit',
-            'offre': 'offre', 'pricing': 'offre', 'tarif': 'offre',
-            'catalogue': 'catalogue', 'cat': 'catalogue', 'data': 'catalogue',
-            'monetisation': 'monetisation', 'money': 'monetisation', 'prix': 'monetisation',
-            'acquisition': 'acquisition', 'acq': 'acquisition', 'marketing': 'acquisition',
-            'tech': 'tech-ops', 'ops': 'tech-ops', 'tech-ops': 'tech-ops', 'infra': 'tech-ops',
-            'marque': 'marque', 'brand': 'marque', 'identite': 'marque',
-            'vision': 'vision', 'long-terme': 'vision',
-        };
         const targetId = aliasMap[alias] || alias;
         const found = subjects.find(s => s.id === targetId);
         if (found) return { ...found, via: 'prefix' };
     }
 
-    // Passe 2 — keyword matching
-    const hay = normalize(text);
-    let best = null;
-    let bestScore = 0;
-    for (const s of subjects) {
-        let score = 0;
-        for (const kw of s.keywords || []) {
-            if (hay.includes(normalize(kw))) score++;
-        }
-        if (score > bestScore) { bestScore = score; best = s; }
+    // Passe 2 — keyword matching (réutilise le moteur de règles agnostique).
+    const ruled = categorizeByRules(text, subjects);
+    if (ruled.id && ruled.score > 0) {
+        const found = subjects.find(s => s.id === ruled.id);
+        if (found) return { ...found, via: 'keywords', tie: ruled.tie };
     }
-    return bestScore > 0 ? { ...best, via: 'keywords' } : null;
+    return null;
 }
 
 /**
- * Insère un item TODO juste après le marker dans BACKLOG.md.
- * Retourne true si inséré, false si déjà présent (idempotent — guard race-condition :
- * si le drain précédent a écrit le BACKLOG mais échoué à appeler /processed, la note
- * resterait pending et serait re-drainée → doublon sans cette vérification).
+ * Trouve l'index d'insertion (fin de la ligne du marker) dans `content`.
+ * Le marker est repéré ANCRÉ EN DÉBUT DE LIGNE (heading) — un `indexOf` brut matchait
+ * aussi un marker quoté à l'intérieur d'une note (`  > ## À faire`) → insertion dans
+ * un blockquote, BACKLOG corrompu. Retourne -1 si le heading est absent.
  */
-async function appendToBacklog(backlogPath, marker, note, phaseLabel) {
-    const raw = await fs.readFile(backlogPath, 'utf8');
-    // Guard idempotency ancré sur le marqueur EXACT écrit plus bas — `(note <id>)` avec
-    // parenthèses. Sans le `)` fermant, un ID court préfixe d'un autre (s3 vs s30) donnait
-    // un faux « déjà présent » → note jamais écrite mais marquée processed = idée perdue.
-    if (raw.includes(`(note ${note.id})`)) return false;
-    const idx = raw.indexOf(marker);
-    if (idx === -1) throw new Error(`"${marker}" introuvable dans ${backlogPath}`);
+function findMarkerInsert(content, marker) {
+    const re = new RegExp(`^${escapeRegExp(marker)}[ \\t]*$`, 'm');
+    const m = re.exec(content);
+    if (!m) return -1;
+    return m.index + m[0].length;
+}
 
+/**
+ * Construit le bloc TODO d'une note (markdown). Lignes neutralisées contre l'injection
+ * de heading (`## …` quoté → `\## …`).
+ */
+function buildNoteBlock(note, phaseLabel) {
+    const text = boundedText(note);
     const date = (note.created_at || new Date().toISOString()).slice(0, 10);
     // Première ligne NON vide (une note commençant par '\n' donnait un titre vide), avec
     // garde null : note.text absent/null ne doit pas crasher (poison-pill re-drainé en boucle).
-    const firstLine = (note.text || '').split('\n').map(l => l.trim()).find(Boolean)?.slice(0, 80) || '(sans titre)';
-    const block = [
+    const firstLine = neutralizeLine(text.split('\n').map(l => l.trim()).find(Boolean)?.slice(0, 80) || '(sans titre)');
+    return [
         ``,
         `### [LOW][TODO] 📝 Note — ${firstLine}`,
         `- **Découvert** : ${date} — saisie via le widget de notes`,
         ...(phaseLabel ? [`- **Phase** : ${phaseLabel}`] : []),
         `- **Note** :`,
-        ...(note.text || '').split('\n').map(l => `  > ${l}`),
+        ...text.split('\n').map(l => `  > ${neutralizeLine(l)}`),
         `- **Action** : trier — convertir en item structuré, traiter, ou archiver`,
         `- **Dernière maj** : ${date} — ingérée depuis le widget (note ${note.id})`,
         ``,
     ].join('\n');
+}
 
-    const insertAt = idx + marker.length;
-    const updated = raw.slice(0, insertAt) + '\n' + block + raw.slice(insertAt);
-    await fs.writeFile(backlogPath, updated, 'utf8');
-    return true;
+/**
+ * Insère une note dans `content` (string en mémoire — pas d'I/O, batchable).
+ * @returns {{ content, written, reason? }}
+ *   written=false + reason='duplicate' si déjà présente (idempotent),
+ *   written=false + reason='no-marker' si ni le marker cible ni le fallback ne sont présents.
+ */
+function insertNoteBlock(content, marker, note, phaseLabel, fallbackMarker) {
+    // Guard idempotency ancré sur le marqueur EXACT écrit — `(note <id>)` avec
+    // parenthèses. Sans le `)` fermant, un ID court préfixe d'un autre (s3 vs s30) donnait
+    // un faux « déjà présent » → note jamais écrite mais marquée processed = idée perdue.
+    if (content.includes(`(note ${note.id})`)) return { content, written: false, reason: 'duplicate' };
+
+    let insertAt = findMarkerInsert(content, marker);
+    let usedLabel = phaseLabel;
+    if (insertAt === -1 && fallbackMarker && fallbackMarker !== marker) {
+        insertAt = findMarkerInsert(content, fallbackMarker); // marker de phase absent → repli global
+        usedLabel = phaseLabel; // on garde l'annotation de phase même rangée en global
+    }
+    if (insertAt === -1) return { content, written: false, reason: 'no-marker' };
+
+    const block = buildNoteBlock(note, usedLabel);
+    const updated = content.slice(0, insertAt) + '\n' + block + content.slice(insertAt);
+    return { content: updated, written: true };
+}
+
+/** Écrit un fichier de façon atomique (tmp unique + rename) — anti-troncature sur crash. */
+let _tmpCounter = 0;
+async function writeFileAtomic(filePath, data) {
+    const tmp = `${filePath}.${process.pid}.${_tmpCounter++}.${Date.now()}.tmp`;
+    try {
+        await fs.writeFile(tmp, data, 'utf8');
+        await fs.rename(tmp, filePath);
+    } catch (e) {
+        await fs.unlink(tmp).catch(() => {});
+        throw e;
+    }
+}
+
+/** Résout un filePath de sujet en restant SOUS notesDir (anti path-traversal). */
+function resolveUnder(notesDir, filePath) {
+    const base = path.resolve(notesDir);
+    const target = path.resolve(base, filePath);
+    const rel = path.relative(base, target);
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return target;
 }
 
 /**
  * Append note dans notes/<sujet>.md (format réservoir : une ligne datée).
  * Multi-lignes → jointes par " / ".
- * Retourne false si le fichier est absent (skip silencieux).
+ * Idempotent : guard propre `(note <id>)` (ne dépend plus du seul flag `written` du
+ * BACKLOG — un refactor futur ou un appel direct ne peut plus créer de doublon).
+ * Retourne false si le fichier est absent (skip silencieux) ou note déjà présente.
  */
 async function appendToNotesFile(filePath, note) {
-    try { await fs.access(filePath); } catch {
-        log(`⚠ ${path.basename(filePath)} absent — skip (BACKLOG seul)`);
-        return false;
+    let existing;
+    try { existing = await fs.readFile(filePath, 'utf8'); } catch (e) {
+        if (e.code === 'ENOENT') { log(`⚠ ${path.basename(filePath)} absent — skip (BACKLOG seul)`); return false; }
+        throw e;
     }
+    if (existing.includes(`(note ${note.id})`)) return false; // déjà drainée dans ce fichier
     const date = (note.created_at || new Date().toISOString()).slice(0, 10);
-    const text = (note.text || '').replace(/\r?\n+/g, ' / ').trim();
-    await fs.appendFile(filePath, `- [${date}] ${text} — _(source: widget)_\n`, 'utf8');
+    const text = boundedText(note).replace(/\r?\n+/g, ' / ').trim();
+    // Marqueur `(note <id>)` littéral (paren adjacente) — DOIT matcher le guard ci-dessus.
+    await fs.appendFile(filePath, `- [${date}] ${text} — _(source: widget)_ (note ${note.id})\n`, 'utf8');
     return true;
 }
 
@@ -153,6 +202,8 @@ async function appendToNotesFile(filePath, note) {
  * @param {Array}    [opts.subjects]       — buckets notes/<sujet>.md (filePath-based).
  *        Si fourni avec `notesDir`, écrit aussi dans le fichier notes du sujet.
  * @param {string}   [opts.notesDir]       — répertoire absolu des notes/<sujet>.md
+ * @param {Object}   [opts.subjectAliasMap]— map alias→subject.id pour la passe préfixe
+ *        "note <alias>: …" (cœur agnostique : aucune taxonomie hardcodée).
  * @param {Function} [opts.llmClassifier]  — fallback async (text, categories)=>id
  * @returns {Promise<{drained:number, pending:number}>}
  */
@@ -167,6 +218,7 @@ export async function drainNotes(opts = {}) {
     const subjects = Array.isArray(opts.subjects) ? opts.subjects : null;
     const notesDir = opts.notesDir || null;
     const llmClassifier = opts.llmClassifier;
+    const subjectAliasMap = opts.subjectAliasMap || {};
 
     if (!baseUrl) { log('baseUrl manquant — skip'); return { drained: 0, pending: 0 }; }
     if (!backlogPath) { log('backlogPath manquant — skip'); return { drained: 0, pending: 0 }; }
@@ -188,41 +240,74 @@ export async function drainNotes(opts = {}) {
     if (pending.length === 0) { log('aucune note pending'); return { drained: 0, pending: 0 }; }
     log(`${pending.length} note(s) pending`);
 
-    let done = 0;
-    for (const note of pending.slice().reverse()) {
-        try {
-            // Catégorisation BACKLOG (legacy companyPhases — marker-based)
-            let targetMarker = marker;
-            let phaseLabel = null;
-            if (categories) {
-                const { categorize } = await import('../categorize/categorize.js');
-                const cat = await categorize(note.text, categories, { llmClassifier });
-                if (cat.marker) { targetMarker = cat.marker; phaseLabel = `${cat.label} (${cat.via})`; }
-            }
+    // Lecture UNIQUE du BACKLOG (perf : plus de read+write par note → O(n²) éliminé).
+    let content;
+    try {
+        content = await fs.readFile(backlogPath, 'utf8');
+    } catch (e) {
+        log(`lecture BACKLOG échouée: ${e.message} — skip`);
+        return { drained: 0, pending: pending.length };
+    }
 
-            // 1. BACKLOG.md
-            let written = false;
+    // Phase 1 — insertions en mémoire (plus ancienne d'abord → plus récente en haut).
+    const ordered = pending.slice().reverse();
+    const handled = []; // { note, written, skip }
+    for (const note of ordered) {
+        // Catégorisation BACKLOG (companyPhases — marker-based).
+        let targetMarker = marker;
+        let phaseLabel = null;
+        if (categories) {
             try {
-                written = await appendToBacklog(backlogPath, targetMarker, note, phaseLabel);
+                const cat = await categorize(boundedText(note), categories, { llmClassifier });
+                if (cat.marker) { targetMarker = cat.marker; phaseLabel = `${cat.label} (${cat.via})`; }
             } catch (e) {
-                if (targetMarker !== marker) written = await appendToBacklog(backlogPath, marker, note, phaseLabel);
-                else throw e;
+                log(`⚠ catégorisation note ${note.id} échouée: ${e.message} — marker global`);
             }
-            if (!written) log(`⚠ note ${note.id} déjà dans BACKLOG — skip écriture (idempotent)`);
+        }
+        const res = insertNoteBlock(content, targetMarker, note, phaseLabel, marker);
+        content = res.content;
+        if (res.reason === 'no-marker') {
+            log(`✗ note ${note.id}: marker "${targetMarker}" (et fallback "${marker}") introuvable — laissée pending`);
+            handled.push({ note, written: false, skip: true });
+            continue;
+        }
+        if (res.reason === 'duplicate') log(`⚠ note ${note.id} déjà dans BACKLOG — skip écriture (idempotent)`);
+        handled.push({ note, written: res.written, skip: false });
+    }
 
-            // 2. notes/<sujet>.md — seulement si note fraîchement insérée (évite le double-write sur re-drain)
-            if (written && subjects && notesDir) {
-                const subject = categorizeBySubject(note.text, subjects);
+    // Phase 2 — persistance UNIQUE et atomique, AVANT tout mark-processed (durabilité :
+    // crash après write → notes re-drainées, idempotency = zéro doublon ; crash avant →
+    // notes restent pending). Jamais l'inverse (sinon idée marquée traitée mais non écrite).
+    if (handled.some(h => h.written)) {
+        try {
+            await writeFileAtomic(backlogPath, content);
+        } catch (e) {
+            log(`✗ écriture BACKLOG échouée: ${e.message} — aucune note marquée processed`);
+            return { drained: 0, pending: pending.length };
+        }
+    }
+
+    // Phase 3 — notes/<sujet>.md (si fraîchement écrite) puis mark-processed côté serveur.
+    let done = 0;
+    for (const h of handled) {
+        if (h.skip) continue; // marker introuvable → reste pending pour un prochain run
+        const note = h.note;
+        try {
+            if (h.written && subjects && notesDir) {
+                const subject = categorizeBySubject(boundedText(note), subjects, subjectAliasMap);
                 if (subject) {
-                    const filePath = path.join(notesDir, subject.filePath);
-                    const ok = await appendToNotesFile(filePath, note);
-                    if (ok) log(`  → notes/${subject.filePath} (${subject.id}, via: ${subject.via})`);
+                    const filePath = resolveUnder(notesDir, subject.filePath);
+                    if (!filePath) {
+                        log(`  ⚠ sujet ${subject.id}: filePath "${subject.filePath}" hors notesDir — skip (sécu)`);
+                    } else {
+                        const ok = await appendToNotesFile(filePath, note);
+                        if (ok) log(`  → notes/${subject.filePath} (${subject.id}, via: ${subject.via})`);
+                    }
                 } else {
                     log(`  → sujet non détecté, BACKLOG seul`);
                 }
             }
 
-            // 3. Marquer processed
             const r = await fetch(`${notesUrl}/${encodeURIComponent(note.id)}/processed`, {
                 method: 'POST',
                 headers,

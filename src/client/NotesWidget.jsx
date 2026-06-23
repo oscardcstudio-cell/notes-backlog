@@ -51,6 +51,7 @@ export function NotesWidget({
     const [text, setText] = useState('');
     const [status, setStatus] = useState({ msg: '', color: '#64748b' });
     const [sending, setSending] = useState(false);
+    const [abandoning, setAbandoning] = useState(null); // id en cours d'abandon (anti double-clic)
     const [notes, setNotes] = useState([]);
     const taRef = useRef(null);
 
@@ -75,6 +76,7 @@ export function NotesWidget({
     const send = useCallback(async () => {
         const t = text.trim();
         if (!t) { setStatus({ msg: 'Note vide', color: '#64748b' }); return; }
+        if (t.length > maxLength) { setStatus({ msg: `Note trop longue (max ${maxLength})`, color: '#ef4444' }); return; }
         setSending(true);
         setStatus({ msg: 'Envoi…', color: '#64748b' });
         try {
@@ -93,13 +95,15 @@ export function NotesWidget({
         } finally {
             setSending(false);
         }
-    }, [text, apiBase, authHeaders, loadHistory]);
+    }, [text, apiBase, authHeaders, loadHistory, maxLength]);
 
     const onKeyDown = useCallback((e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
     }, [send]);
 
     const abandon = useCallback(async (id) => {
+        if (abandoning) return; // un abandon déjà en vol → ignore le double-clic
+        setAbandoning(id);
         try {
             const r = await fetch(`${apiBase}/${encodeURIComponent(id)}/abandoned`, {
                 method: 'POST',
@@ -107,11 +111,13 @@ export function NotesWidget({
                 body: JSON.stringify({}),
             });
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            loadHistory();
+            await loadHistory();
         } catch (e) {
             setStatus({ msg: 'Abandon échoué: ' + e.message, color: '#ef4444' });
+        } finally {
+            setAbandoning(null);
         }
-    }, [apiBase, authHeaders, loadHistory]);
+    }, [apiBase, authHeaders, loadHistory, abandoning]);
 
     return (
         <>
@@ -192,8 +198,9 @@ export function NotesWidget({
                                                         <span style={{ color: '#fbbf24' }}>⏳ en attente</span>
                                                         <button
                                                             onClick={() => abandon(n.id)}
+                                                            disabled={abandoning === n.id}
                                                             title="Abandonner cette note"
-                                                            style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
+                                                            style={{ background: 'none', border: 'none', color: '#64748b', cursor: abandoning === n.id ? 'default' : 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1, opacity: abandoning === n.id ? 0.4 : 1 }}
                                                         >×</button>
                                                     </>
                                                 )}

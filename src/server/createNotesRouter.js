@@ -23,6 +23,8 @@ const DEFAULTS = {
     maxNotesKept: 100,  // garde les N plus récentes (évite la croissance infinie)
 };
 
+const VALID_STATUS = new Set(['pending', 'processed', 'abandoned']);
+
 function newId() {
     return `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -34,6 +36,9 @@ function newId() {
  * @param {number}   [opts.maxNoteLen]     — défaut 2000
  * @param {number}   [opts.maxNotesKept]   — défaut 100
  * @param {Function} [opts.onCreate]       — hook(note) appelé après création (sync flush, log…)
+ * @param {boolean}  [opts.enforceAuth]    — si true, throw au montage quand `auth` absent
+ *        (refuse de monter des endpoints d'écriture disque non protégés). Défaut false
+ *        (rétro-compat) mais un warn est émis si `auth` manque.
  * @returns {import('express').Router}
  *
  * Contrat `store` (toutes méthodes async-friendly, peuvent retourner une Promise) :
@@ -47,6 +52,14 @@ export function createNotesRouter(opts = {}) {
     const { store, auth, onCreate } = opts;
     if (!store) throw new Error('createNotesRouter: `store` requis');
 
+    // Sans `auth`, TOUS les endpoints (création, liste, processed/abandoned) sont publics
+    // et exposent l'écriture disque du store. `enforceAuth` refuse alors le montage ;
+    // sinon on émet un warn explicite (le silence faisait passer ça inaperçu en prod).
+    if (!auth) {
+        if (opts.enforceAuth) throw new Error('createNotesRouter: `auth` requis (enforceAuth=true) — endpoints non protégés refusés');
+        console.warn('[notes-backlog] ⚠ createNotesRouter monté SANS `auth` — endpoints publics (écriture disque exposée). Passe un middleware `auth` ou enforceAuth:true.');
+    }
+
     const maxNoteLen = opts.maxNoteLen ?? DEFAULTS.maxNoteLen;
     const maxNotesKept = opts.maxNotesKept ?? DEFAULTS.maxNotesKept;
 
@@ -56,7 +69,12 @@ export function createNotesRouter(opts = {}) {
     // POST / — créer une note
     router.post('/', express.json({ limit: '8kb' }), async (req, res) => {
         try {
-            const text = (req.body?.text || '').toString().trim();
+            // Type strict : un body { text: {...} } / number / array était coercé via
+            // .toString() ('[object Object]', '1,2'…) et accepté comme note valide.
+            if (typeof req.body?.text !== 'string') {
+                return res.status(400).json({ error: 'text required (string)' });
+            }
+            const text = req.body.text.trim();
             if (!text) return res.status(400).json({ error: 'text required (non-empty)' });
             if (text.length > maxNoteLen) {
                 return res.status(400).json({ error: `text too long (max ${maxNoteLen} chars)` });
@@ -69,8 +87,10 @@ export function createNotesRouter(opts = {}) {
                 processed_at: null,
             };
             await store.add(note);
-            if (store.prune) await store.prune(maxNotesKept);
+            // onCreate AVANT prune : sinon un maxNotesKept bas (ou un ajout concurrent)
+            // peut évincer la note avant le hook → flush/drain d'une note déjà absente.
             if (onCreate) { try { await onCreate(note); } catch { /* non bloquant */ } }
+            if (store.prune) await store.prune(maxNotesKept);
             res.json({ ok: true, note });
         } catch (e) {
             res.status(500).json({ error: e.message });
@@ -86,6 +106,9 @@ export function createNotesRouter(opts = {}) {
             // si array) pour garder une comparaison scalaire fiable.
             const rawStatus = req.query.status;
             const status = Array.isArray(rawStatus) ? rawStatus[0] : rawStatus;
+            if (status && !VALID_STATUS.has(String(status))) {
+                return res.status(400).json({ error: `invalid status (expected ${[...VALID_STATUS].join('|')})` });
+            }
             const filtered = status ? notes.filter(n => n.status === String(status)) : notes;
             res.json({ notes: filtered, total: notes.length });
         } catch (e) {

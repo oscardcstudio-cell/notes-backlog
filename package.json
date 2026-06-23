@@ -1,6 +1,6 @@
 {
   "name": "notes-backlog",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI. Extrait d'Auto-Polymarket.",
   "type": "module",
   "license": "MIT",
@@ -34,12 +34,32 @@
     "react": ">=17"
   },
   "peerDependenciesMeta": {
-    "express": { "optional": true },
-    "react": { "optional": true }
+    "express": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   },
   "scripts": {
     "test": "node test/smoke.mjs && node scripts/check-vendored.mjs",
     "check:vendored": "node scripts/check-vendored.mjs"
   },
-  "keywords": ["notes", "backlog", "express", "react", "widget", "todo", "categorize", "triage", "coverage", "traceability", "rtm", "roadmap"]
+  "keywords": [
+    "notes",
+    "backlog",
+    "express",
+    "react",
+    "widget",
+    "todo",
+    "categorize",
+    "triage",
+    "coverage",
+    "traceability",
+    "rtm",
+    "roadmap"
+  ],
+  "devDependencies": {
+    "express": "^5.2.1"
+  }
 }

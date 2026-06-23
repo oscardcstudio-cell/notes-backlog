@@ -255,6 +255,200 @@ ok(frontier.broken.some(i => i.missing.includes('P4')), 'frontier: [[P4]] → br
 const frontierOk = checkCoverage('- [ ] feature [[P4]]', '# plan\nPhase P4 livrée.');
 ok(frontierOk.linked.length === 1, 'frontier: [[P4]] résolu sur frontière de mot exacte');
 
+// 7) createNotesRouter — tests d'intégration HTTP (POST/GET/processed/abandoned)
+console.log('createNotesRouter (HTTP)');
+const express = (await import('express')).default;
+const { createNotesRouter } = await import('../src/server/createNotesRouter.js');
+const routerStore = createMemoryStore();
+const app = express();
+app.use('/api/notes', createNotesRouter({ store: routerStore, maxNotesKept: 5 }));
+const appSrv = http.createServer(app);
+await new Promise(r => appSrv.listen(0, r));
+const base = `http://127.0.0.1:${appSrv.address().port}/api/notes`;
+const jpost = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+let rr = await jpost(base, { text: 'ma note http' });
+let jd = await rr.json();
+ok(rr.status === 200 && jd.ok && jd.note.id, 'POST / crée une note');
+const createdId = jd.note.id;
+rr = await jpost(base, { text: '' });
+ok(rr.status === 400, 'POST / texte vide → 400');
+rr = await jpost(base, { text: { evil: 1 } });
+ok(rr.status === 400, 'POST / text non-string ({}) → 400 (type strict)');
+rr = await jpost(base, { text: 12345 });
+ok(rr.status === 400, 'POST / text number → 400 (type strict)');
+rr = await fetch(`${base}?status=pending`);
+jd = await rr.json();
+ok(rr.status === 200 && jd.notes.length === 1, 'GET ?status=pending → 1 note');
+rr = await fetch(`${base}?status=bogus`);
+ok(rr.status === 400, 'GET ?status invalide → 400 (whitelist)');
+rr = await jpost(`${base}/${createdId}/processed`, { backlog_ref: 'BACKLOG.md' });
+jd = await rr.json();
+ok(rr.status === 200 && jd.note.status === 'processed', 'POST /:id/processed → status processed');
+rr = await jpost(`${base}/nope/processed`, {});
+ok(rr.status === 404, 'POST /:id/processed id inconnu → 404');
+const ab = await jpost(base, { text: 'à abandonner' });
+const abId = (await ab.json()).note.id;
+rr = await jpost(`${base}/${abId}/abandoned`, { reason: 'doublon' });
+jd = await rr.json();
+ok(rr.status === 200 && jd.note.status === 'abandoned' && jd.note.reason === 'doublon', 'POST /:id/abandoned → status abandoned + reason');
+rr = await jpost(`${base}/nope/abandoned`, {});
+ok(rr.status === 404, 'POST /:id/abandoned id inconnu → 404');
+appSrv.close();
+
+// 7b) onCreate appelé AVANT prune (la note ne doit pas être évincée avant le hook)
+console.log('createNotesRouter onCreate avant prune');
+const seen = [];
+const tinyStore = createMemoryStore();
+const app2 = express();
+app2.use('/api/notes', createNotesRouter({ store: tinyStore, maxNotesKept: 1, onCreate: (n) => seen.push(n.id) }));
+const app2Srv = http.createServer(app2);
+await new Promise(r => app2Srv.listen(0, r));
+const base2 = `http://127.0.0.1:${app2Srv.address().port}/api/notes`;
+await jpost(base2, { text: 'note A' });
+await jpost(base2, { text: 'note B' }); // prune à 1 après chaque add
+app2Srv.close();
+ok(seen.length === 2, 'onCreate reçoit chaque note (appelé avant prune)');
+
+// 8) jsonFileStore — concurrence (le commentaire promet "anti-race", on le prouve)
+console.log('jsonFileStore concurrence');
+const fc = join(tmpdir(), `nbc_${Date.now()}.json`);
+const cs = createJsonFileStore(fc);
+await Promise.all(Array.from({ length: 20 }, (_, i) =>
+    cs.add({ id: `c${i}`, text: `note ${i}`, status: 'pending', created_at: new Date().toISOString() })));
+ok((await cs.list()).length === 20, 'concurrence: 20 add concurrents → 20 notes (aucune perdue)');
+const csReload = createJsonFileStore(fc);
+ok((await csReload.list()).length === 20, 'concurrence: 20 persistées après reload');
+await Promise.all(Array.from({ length: 20 }, (_, i) => cs.markProcessed(`c${i}`)));
+ok((await cs.list()).every(n => n.status === 'processed'), 'concurrence: 20 markProcessed concurrents tous appliqués');
+await fs.rm(fc, { force: true });
+
+// 8b) jsonFileStore — no-op (id inconnu) ne réécrit pas le fichier
+console.log('jsonFileStore no-op skip write');
+const fn = join(tmpdir(), `nbn_${Date.now()}.json`);
+const ns = createJsonFileStore(fn);
+await ns.add({ id: 'x1', text: 'x', status: 'pending', created_at: new Date().toISOString() });
+const mtime1 = (await fs.stat(fn)).mtimeMs;
+await new Promise(r => setTimeout(r, 20));
+ok(await ns.markProcessed('inconnu') === null, 'no-op: markProcessed id inconnu → null');
+const mtime2 = (await fs.stat(fn)).mtimeMs;
+ok(mtime1 === mtime2, 'no-op: fichier NON réécrit sur id inconnu (mtime inchangé)');
+await fs.rm(fn, { force: true });
+
+// 9) drainNotes — BACKLOG absent / marker absent
+console.log('drainNotes erreurs BACKLOG');
+const mkSrv = (notes) => {
+    const s = http.createServer((req, res) => {
+        if (req.method === 'GET' && req.url.startsWith('/api/notes')) {
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ notes: notes.filter(n => n.status === 'pending') }));
+        }
+        const m = req.url.match(/^\/api\/notes\/([^/]+)\/processed$/);
+        if (req.method === 'POST' && m) { const n = notes.find(x => x.id === decodeURIComponent(m[1])); if (n) n.status = 'processed'; res.end('{}'); return; }
+        res.statusCode = 404; res.end('{}');
+    });
+    return s;
+};
+const nAbsent = [{ id: 'a1', text: 'note', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvAbsent = mkSrv(nAbsent);
+await new Promise(r => srvAbsent.listen(0, r));
+const resAbsent = await drainNotes({ baseUrl: `http://127.0.0.1:${srvAbsent.address().port}`, backlogPath: join(tmpdir(), `NOPE_${Date.now()}.md`), marker: '## À faire' });
+srvAbsent.close();
+ok(resAbsent.drained === 0 && nAbsent[0].status === 'pending', 'BACKLOG absent → drained 0, note reste pending (pas perdue)');
+
+const nMarker = [{ id: 'm1', text: 'note', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvMarker = mkSrv(nMarker);
+await new Promise(r => srvMarker.listen(0, r));
+const blNoMarker = join(tmpdir(), `NOMARK_${Date.now()}.md`);
+await fs.writeFile(blNoMarker, '# Backlog\n\n## Autre section\n', 'utf8');
+const resMarker = await drainNotes({ baseUrl: `http://127.0.0.1:${srvMarker.address().port}`, backlogPath: blNoMarker, marker: '## À faire' });
+srvMarker.close();
+ok(resMarker.drained === 0 && nMarker[0].status === 'pending', 'marker absent → drained 0, note reste pending (jamais marquée processed)');
+await fs.rm(blNoMarker, { force: true });
+
+// 9b) drainNotes — fallback marker de phase absent → repli sur marker global
+console.log('drainNotes fallback phase→global');
+const nFb = [{ id: 'fb1', text: 'revoir le tarif', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvFb = mkSrv(nFb);
+await new Promise(r => srvFb.listen(0, r));
+const blFb = join(tmpdir(), `FB_${Date.now()}.md`);
+await fs.writeFile(blFb, '# Backlog\n\n## À trier\n', 'utf8'); // pas de section ## Pricing
+const catsFb = [{ id: 'pricing', label: 'Pricing', marker: '## Pricing', keywords: ['tarif'] }, { id: 'misc', marker: '## À trier', keywords: [], default: true }];
+const resFb = await drainNotes({ baseUrl: `http://127.0.0.1:${srvFb.address().port}`, backlogPath: blFb, marker: '## À trier', categories: catsFb });
+srvFb.close();
+const blFbTxt = await fs.readFile(blFb, 'utf8');
+ok(resFb.drained === 1 && blFbTxt.includes('📝 Note — revoir le tarif'), 'fallback: section phase absente → note rangée sous le marker global');
+await fs.rm(blFb, { force: true });
+
+// 10) drainNotes — injection markdown : un texte contenant un marker ne casse pas le BACKLOG
+console.log('drainNotes injection markdown');
+const nInj = [{ id: 'inj1', text: '## À faire\nmalicieux', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvInj = mkSrv(nInj);
+await new Promise(r => srvInj.listen(0, r));
+const blInj = join(tmpdir(), `INJ_${Date.now()}.md`);
+await fs.writeFile(blInj, '# Backlog\n\n## À faire\n\n## Done\n', 'utf8');
+await drainNotes({ baseUrl: `http://127.0.0.1:${srvInj.address().port}`, backlogPath: blInj, marker: '## À faire' });
+srvInj.close();
+const blInjTxt = await fs.readFile(blInj, 'utf8');
+ok((blInjTxt.match(/^## À faire[ \t]*$/gm) || []).length === 1, 'injection: un seul VRAI heading "## À faire" (la note ne crée pas de section fantôme)');
+ok(blInjTxt.includes('\\## À faire'), 'injection: le marker dans le texte est échappé (\\##)');
+await fs.rm(blInj, { force: true });
+
+// 11) drainNotes — subjects/notesDir + path traversal guard
+console.log('drainNotes subjects + path traversal');
+const { categorizeBySubject } = await import('../src/drain/drainNotes.js');
+ok(categorizeBySubject('note tech-ops: revoir l\'infra', [{ id: 'tech-ops', filePath: 'tech-ops.md', keywords: [] }]).via === 'prefix', 'categorizeBySubject: préfixe "note tech-ops:" → via prefix');
+ok(categorizeBySubject('note p4: pricing', [{ id: 'p4', filePath: 'p4.md', keywords: [] }]).id === 'p4', 'categorizeBySubject: préfixe alphanumérique "note p4:" capté');
+ok(categorizeBySubject('blabla infra serveur', [{ id: 'tech-ops', filePath: 't.md', keywords: ['infra'] }], { infra: 'tech-ops' }).via === 'keywords', 'categorizeBySubject: fallback keywords');
+ok(categorizeBySubject('rien', [{ id: 'x', filePath: 'x.md', keywords: ['zzz'] }]) === null, 'categorizeBySubject: aucun match → null');
+
+const notesDir = join(tmpdir(), `nd_${Date.now()}`);
+await fs.mkdir(notesDir, { recursive: true });
+await fs.writeFile(join(notesDir, 'tech.md'), '# Tech\n', 'utf8');
+const nSub = [{ id: 'su1', text: 'note infra api', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvSub = mkSrv(nSub);
+await new Promise(r => srvSub.listen(0, r));
+const blSub = join(tmpdir(), `SUB_${Date.now()}.md`);
+await fs.writeFile(blSub, '# Backlog\n\n## À faire\n', 'utf8');
+await drainNotes({
+    baseUrl: `http://127.0.0.1:${srvSub.address().port}`, backlogPath: blSub, marker: '## À faire',
+    subjects: [{ id: 'tech', filePath: 'tech.md', keywords: ['infra', 'api'] }], notesDir,
+});
+srvSub.close();
+const techTxt = await fs.readFile(join(notesDir, 'tech.md'), 'utf8');
+ok(techTxt.includes('note infra api') && techTxt.includes('(note su1)'), 'subjects: note écrite dans notes/tech.md avec guard idempotency');
+
+// path traversal : filePath qui s'échappe de notesDir → fichier hors-dossier JAMAIS écrit
+const evilTarget = join(tmpdir(), `EVIL_${Date.now()}.md`);
+const nEvil = [{ id: 'ev1', text: 'note infra', status: 'pending', created_at: '2026-05-31T10:00:00.000Z' }];
+const srvEvil = mkSrv(nEvil);
+await new Promise(r => srvEvil.listen(0, r));
+const blEvil = join(tmpdir(), `BLEVIL_${Date.now()}.md`);
+await fs.writeFile(blEvil, '# Backlog\n\n## À faire\n', 'utf8');
+await drainNotes({
+    baseUrl: `http://127.0.0.1:${srvEvil.address().port}`, backlogPath: blEvil, marker: '## À faire',
+    subjects: [{ id: 'evil', filePath: `../EVIL_${evilTarget.split(/[\\/]/).pop()}`, keywords: ['infra'] }], notesDir,
+});
+srvEvil.close();
+let evilWritten = true;
+try { await fs.access(evilTarget); } catch { evilWritten = false; }
+ok(evilWritten === false, 'path traversal: filePath "../" hors notesDir → fichier NON écrit (bloqué)');
+await fs.rm(notesDir, { recursive: true, force: true }).catch(() => {});
+await fs.rm(blSub, { force: true }); await fs.rm(blEvil, { force: true });
+
+// 12) categorize — llmClassifier qui throw → fail-soft (pas de crash, retombe défaut/meilleur)
+console.log('categorize llm throw');
+const catsLlm = [
+    { id: 'a', label: 'A', marker: '## A', keywords: ['alpha'] },
+    { id: 'b', label: 'B', marker: '## B', keywords: ['alpha'] }, // même kw → tie garanti
+    { id: 'd', marker: '## D', keywords: [], default: true },
+];
+const throwing = async () => { throw new Error('LLM down'); };
+const llmRes = await categorize('alpha ambigu', catsLlm, { llmClassifier: throwing });
+ok(llmRes.via === 'rules' && (llmRes.id === 'a' || llmRes.id === 'b'), 'llm throw: fail-soft → retombe sur meilleur match règles (pas de crash)');
+const llmRes2 = await categorize('aucun mot connu', catsLlm, { llmClassifier: throwing });
+ok(llmRes2.via === 'default' && llmRes2.id === 'd', 'llm throw + zéro match → défaut');
+
 // cleanup
 await fs.rm(f, { force: true }); await fs.rm(`${f}.tmp`, { force: true }); await fs.rm(backlog, { force: true });
 console.log(fail === 0 ? '\nALL GREEN' : `\n${fail} FAILED`);

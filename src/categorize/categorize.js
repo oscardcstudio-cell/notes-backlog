@@ -15,13 +15,7 @@
  * @returns {Promise<{id, label, marker, via: 'rules'|'llm'|'default'}>}
  */
 
-function stripAccents(s) {
-    return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
-}
-
-function normalize(s) {
-    return stripAccents(String(s || '').toLowerCase());
-}
+import { normalize } from '../util/text.js';
 
 /**
  * Score par règles (synchrone, testable sans LLM).
@@ -37,6 +31,12 @@ export function categorizeByRules(text, categories = []) {
         const kws = cat.keywords || [];
         let score = 0;
         for (const kw of kws) {
+            // Substring volontaire (pas frontière de mot) : matche les variantes
+            // morphologiques FR sans stemmer — "cible" doit matcher "cibles",
+            // "interview" → "interviewer", "valider" → "validation". Le léger
+            // sur-match de keywords très courts est un compromis assumé (recall > précision
+            // pour du routage de notes). Les ANCRES exactes (coverage) utilisent, elles,
+            // une frontière de mot via containsWord.
             if (hay.includes(normalize(kw))) score++;
         }
         if (score > bestScore) {
