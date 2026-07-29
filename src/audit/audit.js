@@ -73,6 +73,23 @@ const DEFAULT_DONE_MARKERS = [
     'CLÔTURÉ', 'CLÔTURÉE',
 ];
 
+/**
+ * Marqueurs de travail RESTANT. Un item qui en porte un n'est PAS signalé, même s'il
+ * annonce « LIVRÉ » par ailleurs.
+ *
+ * Mesuré sur un répertoire réel : sans ce filtre, 18 items sur 18 étaient signalés, et
+ * aucun n'était actionnable — ce sont des notes de gros chantier qui **relatent** ce qui
+ * a été livré tout en gardant un reste ouvert (« LIVRÉ … Reste à faire : … »). Un gate
+ * qui crie au loup 18 fois se fait baseliner en bloc, donc ne sert plus à rien. Avec le
+ * filtre il ne reste que les items qui se déclarent finis SANS aucune réserve — les seuls
+ * où « pourquoi ce n'est pas marqué RÉSOLU ? » est une vraie question.
+ */
+const DEFAULT_OPEN_WORK_MARKERS = [
+    'reste', 'restent', 'restant', 'restants', 'à faire', 'todo', 'en attente',
+    'non fait', 'pas encore', 'différé', 'differe', 'à trancher', 'manque', 'manquant',
+    'bloqué', 'en pause', 'later', 'next', 'à confirmer', 'à vérifier', 'non traité',
+];
+
 /** Date auto-déclarée d'un index : `Dernière mise à jour : 2026-06-12`. */
 const DEFAULT_INDEX_DATE_PATTERN = /(?:derni[èe]re\s+mise\s+[àa]\s+jour|last\s+updated)\s*[:—-]*\s*(\d{4}-\d{2}-\d{2})/i;
 
@@ -198,11 +215,17 @@ export function fingerprint(finding) {
  *    capitales ; et en minuscules dépliées un « livre » (le nom commun, omniprésent dans
  *    un projet d'aides à l'édition) matcherait « LIVRÉ » dès qu'on retire les accents.
  */
-function claimsDone(body, markers) {
-    const hay = String(body || '');
-    return markers.find(mk =>
-        new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(mk)}(?![\\p{L}\\p{N}])`, 'u').test(hay),
-    ) || null;
+function hasMarker(body, marker, flags = 'u') {
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(marker)}(?![\\p{L}\\p{N}])`, flags).test(String(body || ''));
+}
+
+function claimsDone(body, markers, openWorkMarkers) {
+    const done = markers.find(mk => hasMarker(body, mk)) || null;
+    if (!done) return null;
+    // Réserve explicite quelque part dans le corps → chantier partiellement livré, pas un
+    // oubli de clôture. Insensible à la casse ici (« Reste à faire », « RESTE »).
+    if (openWorkMarkers.some(mk => hasMarker(body, mk, 'ui'))) return null;
+    return done;
 }
 
 /**
@@ -250,6 +273,7 @@ function resolveAnchor(anchor, repoFiles) {
  * @param {Map<string,{lineCount:number,text?:string}>} [input.repoFiles] — index du repo pour les ancres
  * @param {Object} [opts]
  * @param {string[]} [opts.doneMarkers]
+ * @param {string[]} [opts.openWorkMarkers] — réserves qui DÉSARMENT self-declared-done
  * @param {Object}   [opts.severity] — surcharge de gravité par kind
  * @param {string[]} [opts.baseline] — empreintes connues → dégradées en `warn`
  * @returns {{findings:Array, summary:{total,errors,warnings,byKind}}}
@@ -261,6 +285,7 @@ export function auditNotes(input = {}, opts = {}) {
     const repoFiles = input.repoFiles instanceof Map ? input.repoFiles : null;
 
     const doneMarkers = opts.doneMarkers || DEFAULT_DONE_MARKERS;
+    const openWorkMarkers = opts.openWorkMarkers || DEFAULT_OPEN_WORK_MARKERS;
     const severity = { ...DEFAULT_SEVERITY, ...(opts.severity || {}) };
     const baseline = new Set(opts.baseline || []);
     const indexDatePattern = opts.indexDatePattern || DEFAULT_INDEX_DATE_PATTERN;
@@ -288,7 +313,7 @@ export function auditNotes(input = {}, opts = {}) {
     for (const n of notes) {
         for (const it of parseNoteItems(n.text, opts)) {
             if (!it.resolved) {
-                const mk = claimsDone(it.body, doneMarkers);
+                const mk = claimsDone(it.body, doneMarkers, openWorkMarkers);
                 if (mk) {
                     push('self-declared-done', n.path, it.title,
                         `le corps annonce « ${mk} » mais l'item n'est pas marqué RÉSOLU`, it.lineNo);

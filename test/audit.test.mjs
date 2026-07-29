@@ -74,6 +74,53 @@ test('auditNotes: self-declared-done sur un item ouvert qui annonce FAIT', () =>
     assert.equal(f[0].severity, 'error');
 });
 
+// Sans ce filtre, mesuré sur un repertoire reel : 18 signalements, 0 actionnable — que
+// des notes de gros chantier qui relatent du livre tout en gardant un reste ouvert.
+// Un gate qui crie au loup 18 fois se fait baseliner en bloc, donc ne sert plus a rien.
+test('auditNotes: une réserve (« reste ») désarme self-declared-done', () => {
+    const md = '- [2026-06-01] **[CHANTIER]** Autosave LIVRÉ. Reste à faire : brancher le cron.\n';
+    const { findings } = auditNotes({ notes: [{ path: 'n.md', text: md }] });
+    assert.equal(findings.filter(f => f.kind === 'self-declared-done').length, 0);
+});
+
+test('auditNotes: sans réserve, self-declared-done mord toujours', () => {
+    const md = '- [2026-06-01] **[CHANTIER]** Autosave LIVRÉ, endpoint en place.\n';
+    const { findings } = auditNotes({ notes: [{ path: 'n.md', text: md }] });
+    assert.equal(findings.filter(f => f.kind === 'self-declared-done').length, 1);
+});
+
+test('auditNotes: la réserve est détectée quelle que soit la casse', () => {
+    for (const reserve of ['Reste à faire : X', 'RESTE : X', 'Différé', 'à trancher', 'NEXT']) {
+        const md = `- [2026-06-01] **[C]** LIVRÉ. ${reserve}\n`;
+        const { findings } = auditNotes({ notes: [{ path: 'n.md', text: md }] });
+        assert.equal(findings.filter(f => f.kind === 'self-declared-done').length, 0, reserve);
+    }
+});
+
+test('auditNotes: openWorkMarkers est surchargeable (cœur agnostique)', () => {
+    const md = '- [2026-06-01] **[C]** DONE. still pending review.\n';
+    const opts = { doneMarkers: ['DONE'], openWorkMarkers: ['pending'] };
+    assert.equal(auditNotes({ notes: [{ path: 'n.md', text: md }] }, opts).findings.length, 0);
+    assert.equal(auditNotes({ notes: [{ path: 'n.md', text: md }] }, { ...opts, openWorkMarkers: ['zzz'] })
+        .findings.filter(f => f.kind === 'self-declared-done').length, 1);
+});
+
+// `\b` est ASCII en JS : `\bLIVRÉ\b` ne matche pas « LIVRÉ hier ». Le marqueur le PLUS
+// frequent passait a travers — un detecteur de faux qui rate le cas majoritaire.
+test('auditNotes: un marqueur accentué est bien détecté (piège \\b ASCII)', () => {
+    const md = '- [2026-06-01] **[C]** Le module a été LIVRÉ hier soir.\n';
+    const { findings } = auditNotes({ notes: [{ path: 'n.md', text: md }] });
+    assert.equal(findings.filter(f => f.kind === 'self-declared-done').length, 1);
+});
+
+// Matching casse-sensible : en minuscules dépliées, « livre » (le nom commun, omnipresent
+// dans un projet d'aides a l'edition) matcherait « LIVRÉ ».
+test('auditNotes: « livre » en minuscules ne déclenche pas « LIVRÉ »', () => {
+    const md = "- [2026-06-01] **[C]** L'artiste a écrit un livre et cherche une bourse.\n";
+    const { findings } = auditNotes({ notes: [{ path: 'n.md', text: md }] });
+    assert.equal(findings.filter(f => f.kind === 'self-declared-done').length, 0);
+});
+
 test('auditNotes: unproven-resolution sur un RÉSOLU sans ancre code', () => {
     const { findings } = auditNotes({ notes: [{ path: 'notes/produit.md', text: produitMd }] });
     const f = findings.filter(x => x.kind === 'unproven-resolution');
