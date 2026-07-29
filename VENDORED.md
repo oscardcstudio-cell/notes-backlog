@@ -8,8 +8,8 @@ résiduelle de liaison. Cf. `C:\dev\claude\CLAUDE.md` §no-vendoring + `GOTCHAS.
 
 | Projet | Mode | État |
 |---|---|---|
-| **subvention_match** | dépendance `github:oscardcstudio-cell/notes-backlog#v1.4.0` | ✅ débranché du vendoring (2026-06-15). Plus aucune copie texte. Store custom Postgres `server/modules/notes/drizzleStore.ts` conservé (implémente le contrat). |
-| **start-up-box** | dépendance `github:oscardcstudio-cell/notes-backlog#v1.4.0` | ✅ débranché du `file:` (2026-06-15). Plus aucune copie texte. `npm ci` résout depuis github (lockfile épinglé au commit `9b6eba`), nécessaire car la box est clonée en standalone par des tiers. |
+| **subvention_match** | dépendance `github:oscardcstudio-cell/notes-backlog#v1.5.0` | ✅ débranché du vendoring (2026-06-15). Store custom Postgres `server/modules/notes/drizzleStore.ts` (implémente le contrat). Bumpé v1.5.0 le 2026-06-23 (lock resolved `1244ab7`) via worktree isolé pendant qu'une autre session tournait — commit `ddc4514`, Railway deploy `184a0a27` SUCCESS, prod live. |
+| **start-up-box** | dépendance `github:oscardcstudio-cell/notes-backlog#v1.5.0` | ✅ débranché du `file:` (2026-06-15). Plus aucune copie texte. Bumpé v1.5.0 le 2026-06-23 (lockfile resolved `1244ab7`). `npm ci` résout depuis github, nécessaire car la box est clonée en standalone par des tiers. |
 
 ## Store custom (pas une copie — un adaptateur du contrat)
 
