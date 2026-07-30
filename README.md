@@ -249,6 +249,79 @@ Quand un item est confirmé implémenté (grep/glob dans le code réel, jamais s
 
 Sans ce marqueur, les items résolus restent indiscernables des items ouverts et les agents les re-surfacent à chaque session.
 
+⚠️ **Cette règle ne suffit pas seule, et on l'a vérifié à ses dépens.** Elle se déclenche « si un agent
+re-surface l'item » — donc si quelqu'un **relit** le répertoire. Dans un projet réel où rien ne lit les notes,
+la relecture n'arrive jamais : sur trois mois, **32 clôtures sur 37 sont tombées le même jour** (une passe
+d'audit manuelle), une seule le jour où le travail a été fait, délai médian **40 jours**. Un agent a fini par
+recommander un chantier livré cinq semaines plus tôt. La capture a un déclencheur d'événement, la clôture
+n'en avait aucun. D'où le module ci-dessous.
+
+## Audit du répertoire (la moitié SORTIE)
+
+`coverage` vérifie qu'aucune idée n'est perdue **du plan**. `audit` vérifie que les items **fermés le sont
+vraiment** et que les items **ouverts le sont encore** — et donne à la clôture les déclencheurs qui lui
+manquaient.
+
+| Constat | Ce qu'il attrape | Gravité |
+|---|---|---|
+| `self-declared-done` | item ouvert dont le corps annonce « LIVRÉ / FAIT / ABANDONNÉ / PÉRIMÉ » — l'agent **savait**, il ne l'a pas dit au bon endroit | 🔴 |
+| `stale-index` | fichier index qui se déclare à jour au ↔ date pendant qu'une source porte un item plus récent | 🔴 |
+| `dangling-anchor` | RÉSOLU dont l'ancre code ne résout pas (fichier absent, ligne hors bornes, symbole introuvable) | 🔴 |
+| `unproven-resolution` | RÉSOLU sans aucune ancre code | 🟠 |
+| `orphan-file` | fichier de notes qu'aucune étape du plan ne référence → jamais relu | 🟠 |
+
+```js
+import { auditNotes, relatedOpenItems, formatAuditReport } from 'notes-backlog/audit';
+
+const { findings, summary } = auditNotes({ notes, indexes, planRefs, repoFiles });
+// summary: { total, errors, warnings, baselined, byKind }
+```
+
+En CLI (binaire `notes-audit`) — **gate** : exit 1 s'il reste un constat bloquant :
+
+```bash
+git ls-files > .cache/files.txt
+notes-audit .planning/notes \
+  --plan .planning/launch-plan.json \
+  --index .planning/notes/CROSS-REF.md \
+  --repo-files .cache/files.txt \
+  --baseline .planning/notes-audit-baseline.json
+```
+
+### Ancres code : trois formes
+
+```markdown
+`src/Form.tsx:386`            fichier + ligne
+`src/Form.tsx:STATUS_LIST`    fichier + SYMBOLE — PRÉFÉRÉ : survit au drift des lignes
+`video-studio:src/index.ts:488`  ancre EXTERNE (autre repo) — jamais comptée cassée
+```
+
+Une ancre `fichier:ligne` reste « valide » longtemps après que le code visé a bougé : le numéro dérive, la
+vérif ne dit plus rien. L'ancre symbole est cherchée dans le fichier, donc elle casse quand la chose casse.
+La forme préfixée existe parce qu'une ref vers un autre repo est autrement indistinguable d'une ref cassée.
+
+### Baseline — pourquoi le gate part vert
+
+Un répertoire vivant a déjà un stock de constats le jour où on branche le gate. Le rendre rouge d'emblée
+garantit le `--no-verify`, donc un gate mort, donc le problème d'origine. `--write-baseline` fige le stock
+connu (dégradé en avertissement) : **seules les régressions échouent**. On draine le stock ensuite, en
+retirant des lignes de la baseline.
+
+L'empreinte d'un constat **exclut volontairement le numéro de ligne** — sinon la baseline périmerait au
+premier commit et re-signalerait tout le stock comme nouveau.
+
+### Le déclencheur de clôture
+
+`relatedOpenItems(notes, changedPaths)` répond à : *quels items ouverts citent un fichier que ce push
+modifie ?* C'est le chaînon manquant — au moment d'un push, quelqu'un sait si c'est fait.
+
+```bash
+git diff --name-only origin/main... > .cache/changed.txt
+notes-audit .planning/notes --changed .cache/changed.txt
+```
+
+Informatif par nature : on ne bloque pas un push parce qu'une note parle du fichier.
+
 ## Origine
 
 Extrait d'Auto-Polymarket où le module relie le dashboard (Railway) au `BACKLOG.md`

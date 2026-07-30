@@ -1,7 +1,7 @@
 {
   "name": "notes-backlog",
-  "version": "1.5.0",
-  "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI. Extrait d'Auto-Polymarket.",
+  "version": "1.6.0",
+  "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI + audit de cohérence du répertoire de notes. Extrait d Auto-Polymarket.",
   "type": "module",
   "license": "MIT",
   "author": "Oscar de Canecaude",
@@ -17,13 +17,15 @@
     "./drain": "./src/drain/drainNotes.js",
     "./categorize": "./src/categorize/categorize.js",
     "./coverage": "./src/coverage/coverage.js",
+    "./audit": "./src/audit/audit.js",
     "./presets/company-phases": "./src/presets/companyPhases.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "bin": {
     "notes-drain": "./src/drain/drainNotes.js",
-    "notes-coverage": "./src/coverage/coverage.js"
+    "notes-coverage": "./src/coverage/coverage.js",
+    "notes-audit": "./src/audit/audit.js"
   },
   "files": [
     "src",
@@ -42,7 +44,7 @@
     }
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node scripts/check-vendored.mjs",
+    "test": "node test/smoke.mjs && node --test 'test/*.test.mjs' && node scripts/check-vendored.mjs",
     "check:vendored": "node scripts/check-vendored.mjs"
   },
   "keywords": [
@@ -57,7 +59,11 @@
     "coverage",
     "traceability",
     "rtm",
-    "roadmap"
+    "roadmap",
+    "audit",
+    "stale",
+    "drift",
+    "gate"
   ],
   "devDependencies": {
     "express": "^5.2.1"
