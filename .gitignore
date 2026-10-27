@@ -2,3 +2,12 @@ node_modules/
 *.log
 data/
 *.tmp
+.env
+.env.*
+!.env.example
+.cache/
+coverage/
+.DS_Store
+Thumbs.db
+desktop.ini
+.playwright-mcp/
