@@ -44,7 +44,7 @@
     }
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node --test 'test/*.test.mjs' && node scripts/check-vendored.mjs",
+    "test": "node test/smoke.mjs && node --test \"test/*.test.mjs\" && node scripts/check-vendored.mjs",
     "check:vendored": "node scripts/check-vendored.mjs"
   },
   "keywords": [
