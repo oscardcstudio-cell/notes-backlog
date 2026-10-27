@@ -22,7 +22,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '../../..'); // packages/notes-backlog/scripts → C:\dev\claude
+const repoRoot = path.resolve(here, '../../..'); // oscardcstudio/notes-backlog/scripts → C:\dev\claude
 
 // Stores customs des consommateurs (adaptateurs du contrat, pas des copies du package).
 // `mustContain` = capacités du contrat que le store doit implémenter.

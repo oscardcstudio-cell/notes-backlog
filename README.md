@@ -21,10 +21,8 @@ Flux : on saisit une note dans le widget → POST stockée (`pending`) → un cr
 Consommé en dépendance versionnée (jamais vendorisé — cf. `VENDORED.md`) :
 
 ```bash
-# recommandé (marche en Docker/Railway ET en clone standalone) :
-npm install github:oscardcstudio-cell/notes-backlog#v1.5.0
-# ou, en dev local depuis un projet voisin :
-npm install file:../packages/notes-backlog
+# marche en Docker/Railway ET en clone standalone :
+npm install github:oscardcstudio-cell/notes-backlog#v1.6.0
 ```
 
 `express` (≥4) et `react` (≥17) sont des peerDependencies optionnelles — chaque brique n'en charge qu'une.
