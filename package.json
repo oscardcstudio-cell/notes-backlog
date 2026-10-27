@@ -3,7 +3,7 @@
   "version": "1.6.0",
   "description": "Widget de prise de notes (idée/bug/observation) → BACKLOG.md, avec catégorisation auto par phase (règles + LLM injecté). Backend Express storage-agnostic + widget React autonome + drain CLI + audit de cohérence du répertoire de notes. Extrait d Auto-Polymarket.",
   "type": "module",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "author": "Oscar de Canecaude",
   "repository": {
     "type": "git",
