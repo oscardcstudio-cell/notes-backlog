@@ -1,0 +1,21 @@
+# notes-backlog
+> Widget de prise de notes (idée, bug, observation) vers BACKLOG.md : routeur Express storage-agnostic, widget React, drain CLI, coverage BACKLOG/ROADMAP et audit de cohérence du répertoire de notes.
+
+## Vue d'ensemble
+- [CLAUDE.md](CLAUDE.md): règles du repo
+- [README.md](README.md): briques, installation, endpoints, configuration
+- [VENDORED.md](VENDORED.md): registre des consommateurs et versions pinnées
+
+## Fichiers critiques
+- [src/audit/audit.js](src/audit/audit.js): audit du répertoire de notes (items fermés vraiment fermés, index périmés, ancres mortes, fichiers orphelins) ; cœur sans I/O + CLI `notes-audit`
+- [src/drain/drainNotes.js](src/drain/drainNotes.js): notes pending (API) vers BACKLOG.md et notes/<sujet>.md, puis marque traité ; CLI `notes-drain`
+- [src/coverage/coverage.js](src/coverage/coverage.js): croise BACKLOG.md et ROADMAP.md, signale les idées orphelines ; CLI `notes-coverage`
+- [src/categorize/categorize.js](src/categorize/categorize.js): range une note dans une catégorie (préfixe explicite, mots-clés, LLM injecté)
+- [src/server/createNotesRouter.js](src/server/createNotesRouter.js): routeur Express ; stores dans `src/server/stores/`
+- [src/client/NotesWidget.jsx](src/client/NotesWidget.jsx): widget React flottant
+- [src/presets/companyPhases.js](src/presets/companyPhases.js): data des 8 phases du COMPANY_PLAYBOOK
+- [scripts/check-vendored.mjs](scripts/check-vendored.mjs): vérifie la parité du store custom de subvention_match avec le contrat
+
+## Points non-évidents (gotchas)
+- `express` n'est qu'une devDependency (peerDependency optionnelle) : `npm install` avant `npm test`.
+- Le glob des suites est entre guillemets doubles échappés dans `package.json` pour fonctionner sous cmd et sh.
