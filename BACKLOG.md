@@ -1,0 +1,2 @@
+
+- **2026-10-31 · `audit.js --repo-files` lit chaque fichier listé comme texte** (`src/audit/audit.js`, boucle `readIfExists` vers `repoFiles`). Un repo hôte qui versionne ~650 Mo d'images (subvention_match, commit 811ffd70) fait tomber Node en heap out of memory et bloque le pre-push. Contournement côté hôte : filtrer les binaires dans `git ls-files`. Correction à faire ici : ne charger que les fichiers réellement visés par une ancre, ou sauter les extensions binaires / les fichiers au-delà d'une taille.
