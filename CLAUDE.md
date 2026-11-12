@@ -10,3 +10,6 @@ Package partagé (widget de notes, drain vers BACKLOG.md, coverage, audit). Cons
 - `check-vendored.mjs` lit le store de subvention_match par un chemin relatif à `C:\dev\claude` : cible absente = SKIP, pas échec.
 - Le noyau (`categorize`, `drain`, `coverage`, `audit`) est agnostique et sans I/O : les patterns et presets viennent de l'appelant.
 - Carte des fichiers : [llms.txt](llms.txt).
+
+## Tâches = Beads
+Les tâches restantes vivent dans Beads (`bd ready`, `bd list`), pas dans un fichier de notes. Une tâche finie : `bd close <id>`.
