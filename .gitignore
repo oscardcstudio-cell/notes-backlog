@@ -11,3 +11,10 @@ coverage/
 Thumbs.db
 desktop.ini
 .playwright-mcp/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
